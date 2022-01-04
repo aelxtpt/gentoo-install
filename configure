@@ -62,7 +62,7 @@ function get_timezone() {
 		timezone=${file#*zoneinfo/}
 		if [[ $timezone == "$file" ]]; then
 			# not pointing to expected location or not Region/City
-			echo "Europe/London"
+			echo "America/Sao_Paulo"
 		else
 			echo "$timezone"
 		fi

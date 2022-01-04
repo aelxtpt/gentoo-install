@@ -155,33 +155,21 @@ function get_cmdline() {
 	echo -n "${cmdline[*]}"
 }
 
-function install_kernel_efi() {
-	try emerge --verbose sys-boot/efibootmgr
+function install_grub() {
+	# Add grub_platforms
+	einfo "Adding GRUB_PLATFORMS to make.conf"
+	echo 'GRUB_PLATFORMS="efi-64"' >> /etc/portage/make.conf \
+		|| die "Could not modify /etc/portage/make.conf"
 
-	# Copy kernel to EFI
-	local kernel_file
-	kernel_file="$(find "/boot" -name "vmlinuz-*" -printf '%f\n' | sort -V | tail -n 1)" \
-		|| die "Could not list newest kernel file"
+	try emerge --verbose sys-boot/grub
 
 	mkdir_or_die 0755 "/boot/efi/EFI"
-	cp "/boot/$kernel_file" "/boot/efi/EFI/vmlinuz.efi" \
-		|| die "Could not copy kernel to EFI partition"
 
-	# Generate initramfs
-	generate_initramfs "/boot/efi/EFI/initramfs.img"
+	einfo "Installing grub"
+	try grub-install --target=x86_64-efi --efi-directory=/boot/efi/EFI
 
-	# Create boot entry
-	einfo "Creating efi boot entry"
-	local efipartdev
-	efipartdev="$(resolve_device_by_id "$DISK_ID_EFI")" \
-		|| die "Could not resolve device with id=$DISK_ID_EFI"
-	efipartdev="$(realpath "$efipartdev")" \
-		|| die "Error in realpath '$efipartdev'"
-	local efipartnum="${efipartdev: -1}"
-	local gptdev
-	gptdev="$(resolve_device_by_id "${DISK_ID_PART_TO_GPT_ID[$DISK_ID_EFI]}")" \
-		|| die "Could not resolve device with id=${DISK_ID_PART_TO_GPT_ID[$DISK_ID_EFI]}"
-	try efibootmgr --verbose --create --disk "$gptdev" --part "$efipartnum" --label "gentoo" --loader '\EFI\vmlinuz.efi' --unicode 'initrd=\EFI\initramfs.img'" $(get_cmdline)"
+	einfo "Configuring grub"
+	try grub-mkconfig -o /boot/grub/grub.cfg
 }
 
 function generate_syslinux_cfg() {
@@ -233,10 +221,10 @@ function install_kernel_bios() {
 function install_kernel() {
 	# Install vanilla kernel
 	einfo "Installing vanilla kernel and related tools"
-	try emerge --verbose sys-kernel/dracut sys-kernel/gentoo-kernel-bin
+	try emerge --verbose sys-kernel/gentoo-sources
 
 	if [[ $IS_EFI == "true" ]]; then
-		install_kernel_efi
+		die "Compile the kernel and after execute ./install complete_install"
 	else
 		install_kernel_bios
 	fi
@@ -357,6 +345,10 @@ EOF
 
 	# Install kernel and initramfs
 	install_kernel
+}
+
+function complete_install_in_chroot() {
+	[ $# == 0 ]] || die "Too many arguments"
 
 	# Generate a valid fstab file
 	generate_fstab
@@ -420,6 +412,10 @@ function main_install() {
 	[[ $IS_EFI == "true" ]] \
 		&& mount_efivars
 	gentoo_chroot "$ROOT_MOUNTPOINT" "$GENTOO_INSTALL_REPO_BIND/install" __install_gentoo_in_chroot
+}
+
+function main_install_after_compile_kernel() {
+	gentoo_chroot "$ROOT_MOUNTPOINT" "$GENTOO_INSTALL_REPO_BIND/install" __complete_install
 }
 
 function main_chroot() {

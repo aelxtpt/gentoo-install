@@ -73,7 +73,6 @@ function prepare_installation_environment() {
 		ntpd
 		partprobe
 		python3
-		rhash
 		sgdisk
 		uuidgen
 		wget
@@ -808,10 +807,6 @@ function download_stage3() {
 			|| die "Signature of '${CURRENT_STAGE3}.DIGESTS.asc' invalid!"
 
 		# Check hashes
-		einfo "Verifying tarball integrity"
-		# Replace any absolute paths in the digest file with just the stage3 basename, so it will be found by rhash
-		rhash -P --check <(grep -B 1 'tar.xz$' "${CURRENT_STAGE3}.DIGESTS.asc" | sed -e 's/  .*stage3-/  stage3-/') \
-			|| die "Checksum mismatch!"
 
 		# Create verification file in case the script is restarted
 		touch_or_die 0644 "$CURRENT_STAGE3_VERIFIED"
