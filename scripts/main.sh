@@ -163,10 +163,8 @@ function install_grub() {
 
 	try emerge --verbose sys-boot/grub
 
-	mkdir_or_die 0755 "/boot/efi/EFI"
-
 	einfo "Installing grub"
-	try grub-install --target=x86_64-efi --efi-directory=/boot/efi/EFI
+	try grub-install --target=x86_64-efi --efi-directory=/boot
 
 	einfo "Configuring grub"
 	try grub-mkconfig -o /boot/grub/grub.cfg
@@ -223,11 +221,74 @@ function install_kernel() {
 	einfo "Installing vanilla kernel and related tools"
 	try emerge --verbose sys-kernel/gentoo-sources
 
-	if [[ $IS_EFI == "true" ]]; then
-		die "Compile the kernel and after execute ./install complete_install"
-	else
-		install_kernel_bios
+	einfo "Setting kernel number"
+	try eselect kernel set 1
+
+	einfo "Copying kernel config"
+	try cp $GENTOO_INSTALL_REPO_DIR/kernel_config/config /usr/src/linux/
+
+	einfo "Renaming kernel config file"
+	try mv /usr/src/linux/config /usr/src/linux/.config
+
+	einfo "Installing lzo lzop"
+	try emerge --verbose lzo lzop
+
+	einfo "Compiling kernel"
+	try cd /usr/src/linux && make -j6 && make modules_install && make install
+
+	install_grub
+
+	# Generate a valid fstab file
+	generate_fstab
+
+	# Install gentoolkit
+	einfo "Installing gentoolkit"
+	try emerge --verbose app-portage/gentoolkit
+
+	# Install and enable sshd
+	if [[ $INSTALL_SSHD == "true" ]]; then
+		install_sshd
 	fi
+
+	if [[ $SYSTEMD != "true" ]]; then
+		# Install and enable dhcpcd
+		einfo "Installing dhcpcd"
+		try emerge --verbose net-misc/dhcpcd
+
+		enable_service dhcpcd
+	fi
+
+	if [[ $SYSTEMD == "true" ]]; then
+		# Enable systemd networking and dhcp
+		enable_service systemd-networkd
+		enable_service systemd-resolved
+		echo -en "[Match]\nName=en*\n\n[Network]\nDHCP=yes" > /etc/systemd/network/20-wired-dhcp.network \
+			|| die "Could not write dhcp network config to '/etc/systemd/network/20-wired-dhcp.network'"
+		chown root:systemd-network /etc/systemd/network/20-wired-dhcp.network \
+			|| die "Could not change owner of '/etc/systemd/network/20-wired-dhcp.network'"
+		chmod 640 /etc/systemd/network/20-wired-dhcp.network \
+			|| die "Could not change permissions of '/etc/systemd/network/20-wired-dhcp.network'"
+	fi
+
+	# Install additional packages, if any.
+	if [[ ${#ADDITIONAL_PACKAGES[@]} -gt 0 ]]; then
+		einfo "Installing additional packages"
+		# shellcheck disable=SC2086
+		try emerge --verbose --autounmask-continue=y -- "${ADDITIONAL_PACKAGES[@]}"
+	fi
+
+	if ask "Do you want to assign a root password now?"; then
+		try passwd root
+		einfo "Root password assigned"
+	else
+		try passwd -d root
+		ewarn "Root password cleared, set one as soon as possible!"
+	fi
+
+	einfo "Gentoo installation complete."
+	[[ $USED_LUKS == "true" ]] \
+		&& einfo "A backup of your luks headers can be found at '$LUKS_HEADER_BACKUP_DIR', in case you want to have a backup."
+	einfo "You may now reboot your system."
 }
 
 function add_fstab_entry() {
@@ -243,7 +304,7 @@ function generate_fstab() {
 		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_ROOT")" "/" "$DISK_ID_ROOT_TYPE" "$DISK_ID_ROOT_MOUNT_OPTS" "0 1"
 	fi
 	if [[ $IS_EFI == "true" ]]; then
-		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_EFI")" "/boot/efi" "vfat" "defaults,noatime,fmask=0177,dmask=0077,noexec,nodev,nosuid,discard" "0 2"
+		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_EFI")" "/boot" "vfat" "defaults,noatime,fmask=0177,dmask=0077,noexec,nodev,nosuid,discard" "0 2"
 	else
 		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_BIOS")" "/boot/bios" "vfat" "defaults,noatime,fmask=0177,dmask=0077,noexec,nodev,nosuid,discard" "0 2"
 	fi
@@ -265,7 +326,7 @@ function main_install_gentoo_in_chroot() {
 		# Mount efi partition
 		mount_efivars
 		einfo "Mounting efi partition"
-		mount_by_id "$DISK_ID_EFI" "/boot/efi"
+		mount_by_id "$DISK_ID_EFI" "/boot"
 	else
 		# Mount bios partition
 		einfo "Mounting bios partition"
@@ -347,63 +408,6 @@ EOF
 	install_kernel
 }
 
-function complete_install_in_chroot() {
-	[ $# == 0 ] || die "Too many arguments"
-
-	install_grub
-
-	# Generate a valid fstab file
-	generate_fstab
-
-	# Install gentoolkit
-	einfo "Installing gentoolkit"
-	try emerge --verbose app-portage/gentoolkit
-
-	# Install and enable sshd
-	if [[ $INSTALL_SSHD == "true" ]]; then
-		install_sshd
-	fi
-
-	if [[ $SYSTEMD != "true" ]]; then
-		# Install and enable dhcpcd
-		einfo "Installing dhcpcd"
-		try emerge --verbose net-misc/dhcpcd
-
-		enable_service dhcpcd
-	fi
-
-	if [[ $SYSTEMD == "true" ]]; then
-		# Enable systemd networking and dhcp
-		enable_service systemd-networkd
-		enable_service systemd-resolved
-		echo -en "[Match]\nName=en*\n\n[Network]\nDHCP=yes" > /etc/systemd/network/20-wired-dhcp.network \
-			|| die "Could not write dhcp network config to '/etc/systemd/network/20-wired-dhcp.network'"
-		chown root:systemd-network /etc/systemd/network/20-wired-dhcp.network \
-			|| die "Could not change owner of '/etc/systemd/network/20-wired-dhcp.network'"
-		chmod 640 /etc/systemd/network/20-wired-dhcp.network \
-			|| die "Could not change permissions of '/etc/systemd/network/20-wired-dhcp.network'"
-	fi
-
-	# Install additional packages, if any.
-	if [[ ${#ADDITIONAL_PACKAGES[@]} -gt 0 ]]; then
-		einfo "Installing additional packages"
-		# shellcheck disable=SC2086
-		try emerge --verbose --autounmask-continue=y -- "${ADDITIONAL_PACKAGES[@]}"
-	fi
-
-	if ask "Do you want to assign a root password now?"; then
-		try passwd root
-		einfo "Root password assigned"
-	else
-		try passwd -d root
-		ewarn "Root password cleared, set one as soon as possible!"
-	fi
-
-	einfo "Gentoo installation complete."
-	[[ $USED_LUKS == "true" ]] \
-		&& einfo "A backup of your luks headers can be found at '$LUKS_HEADER_BACKUP_DIR', in case you want to have a backup."
-	einfo "You may now reboot your system."
-}
 
 function main_install() {
 	[[ $# == 0 ]] || die "Too many arguments"

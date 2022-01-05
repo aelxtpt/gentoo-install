@@ -374,10 +374,10 @@ function disk_format() {
 	case "$type" in
 		'bios'|'efi')
 			if [[ -v "arguments[label]" ]]; then
-				mkfs.fat -F 32 -n "$label" "$device" \
+				mkfs.vfat -F 32 -n "$label" "$device" \
 					|| die "Could not format device '$device' ($id)"
 			else
-				mkfs.fat -F 32 "$device" \
+				mkfs.vfat -F 32 "$device" \
 					|| die "Could not format device '$device' ($id)"
 			fi
 			;;
