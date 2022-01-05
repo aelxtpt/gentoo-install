@@ -348,7 +348,9 @@ EOF
 }
 
 function complete_install_in_chroot() {
-	[ $# == 0 ]] || die "Too many arguments"
+	[ $# == 0 ] || die "Too many arguments"
+
+	install_grub
 
 	# Generate a valid fstab file
 	generate_fstab
