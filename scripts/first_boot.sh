@@ -7,6 +7,8 @@ VIDEO_CARDS="intel nvidia"
 USE="X suid xvmc nvidia"
 INPUT_DEVICES="libinput"
 
+DESKTOP_APPS="kde-apps/ark kde-apps/dolphin kde-apps/dolphin-plugins-git kde-apps/kalgebra kde-apps/kcalc kde-apps/kcalc kde-apps/konsole kde-apps/kde-dev-utils kde-apps/kmouth kde-apps/kmplot kde-apps/kompare kde-apps/krdc kde-apps/spectacle"
+
 function first_boot() {
 	einfo "Selecting profile default/linux/amd64/17.1/desktop/plasma/systemd"
     try eselect profile set default/linux/amd64/17.1/desktop/plasma/systemd
@@ -22,9 +24,27 @@ function first_boot() {
 			|| die "Could not add INPUT_DEVICES on /etc/portage/make.conf"
 	fi
 
+	einfo "Resolving permissions on kernel src"
+	chmod a+r /usr/src/linux
+
     einfo "Setting desktop packages"
     try emerge $PACKAGES
 
 	einfo "Update world set"
     try emerge --update --deep --newuse @world
+
+    einfo "Installing KDE Plasma"
+    try emerge kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
+
+    einfo "Installing desktop apps"
+    try emerge $DESKTOP_APPS
+
+    einfo "Create .xinitrc"
+    touch ~/.xinitrc
+
+    einfo "Add content to .xinitrc to start plasma"
+    echo "#!/bin/sh" >> ~/.xinitrc \
+		|| die "Could not add content to .xinitrc"
+	echo "exec dbus-launch --exit-with-session startplasma-x11" >> ~/.xinitrc \
+		|| die "Could not add content to .xinitrc"
 }
