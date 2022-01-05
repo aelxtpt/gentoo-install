@@ -765,6 +765,31 @@ function bind_repo_dir() {
 		|| die "Could not bind mount '$GENTOO_INSTALL_REPO_DIR_ORIGINAL' to '$GENTOO_INSTALL_REPO_BIND'"
 }
 
+function file_has_string() {
+	local str="$1"
+	local file_to_check="$2"
+
+	if grep -q $str "$file_to_check"; then
+		return 0 # true
+	fi
+
+	return 1 # false
+}
+
+function file_exists() {
+	local file_to_check="$1"
+
+	if test -f "$file_to_check"; then
+        return 0 # true
+    fi
+
+    return 1 # false
+}
+
+function download_file() {
+	local url="$1"
+}
+
 function download_stage3() {
 	cd "$TMP_DIR" \
 		|| die "Could not cd into '$TMP_DIR'"

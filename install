@@ -95,6 +95,9 @@ while [[ $# -gt 0 ]]; do
 		"first_boot")
 			ACTION="first_boot"
 			;;
+		"post_install")
+			ACTION="post_install"
+			;;
 		*) die "Invalid option '$1'" ;;
 	esac
 	shift
@@ -137,5 +140,6 @@ case "$ACTION" in
 	"install") main_install "$@" ;;
 	"__install_gentoo_in_chroot") main_install_gentoo_in_chroot "$@" ;;
 	"first_boot") first_boot "$@" ;;
+	"post_install") post_install "$@" ;;
 	*) die "Invalid action '$ACTION'" ;;
 esac
