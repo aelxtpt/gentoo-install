@@ -7,10 +7,7 @@ VIDEO_CARDS="intel nvidia"
 USE="X suid xvmc nvidia"
 INPUT_DEVICES="libinput"
 
-DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/dolphin-plugins-git kde-apps/kalgebra \
-	kde-apps/kcalc kde-apps/konsole kde-apps/kde-dev-utils kde-apps/kmouth \
-	kde-apps/kmplot kde-apps/kompare kde-apps/krdc kde-apps/spectacle \
-	app-text/foliate www-client/firefox kde-apps/filelight kde-plasma/plasma-nm")
+DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/dolphin-plugins-git kde-apps/kalgebra kde-apps/kcalc kde-apps/konsole kde-apps/kde-dev-utils kde-apps/kmouth kde-apps/kmplot kde-apps/kompare kde-apps/krdc kde-apps/spectacle app-text/foliate www-client/firefox kde-apps/filelight kde-plasma/plasma-nm kde-misc/latte-dock")
 
 function first_boot() {
 	einfo "Selecting profile default/linux/amd64/17.1/desktop/plasma/systemd"
@@ -32,16 +29,18 @@ function first_boot() {
 	chmod a+r /usr/src/linux
 
     einfo "Setting desktop packages"
-    try emerge $PACKAGES
+    try emerge --noreplace $PACKAGES
 
-	einfo "Update world set"
-    try emerge --update --deep --newuse @world
+    if ask "Do you want update world set ?"; then
+		einfo "Update world set"
+    	try emerge --update --deep --newuse @world
+	fi
 
     einfo "Installing KDE Plasma"
-    try emerge kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
+    try emerge --noreplace kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
 
     einfo "Installing desktop apps"
-    try emerge --autounmask-continue=y -- "${DESKTOP_APPS[@]}"
+    try emerge --noreplace --autounmask-continue=y -- "${DESKTOP_APPS[@]}"
 
     if ! file_exists ~/.xinitrc; then
     	einfo "Create .xinitrc"
@@ -69,32 +68,29 @@ function first_boot() {
 		fi
 	fi
 
-	einfo "Installing Steam"
-	try emerge --autounmask-continue=y --noreplace app-eselect/eselect-repository dev-vcs/git
-	try eselect repository enable steam-overlay
-	try emerge --sync
+	if ask "Do you want install Steam ?"; then
+		einfo "Installing Steam"
+		try emerge --autounmask-continue=y --noreplace app-eselect/eselect-repository dev-vcs/git
+		try eselect repository enable steam-overlay
+		try emerge --sync
 
-	if ! file_has_string "*/*::steam-overlay" /etc/portage/package.accept_keywords; then
-		einfo "Add steam overlay package to accept keywords"
-		echo "*/*::steam-overlay" >> /etc/portage/package.accept_keywords || die "Could not add steam overlay to accept_keywords"
+		if ! file_has_string "*/*::steam-overlay" /etc/portage/package.accept_keywords/steam-overlay; then
+			einfo "Add steam overlay package to accept keywords"
+			echo "*/*::steam-overlay" >> /etc/portage/package.accept_keywords/steam-overlay || die "Could not add steam overlay to accept_keywords"
+		fi
+
+		# Not working, need unmaskwrite and etc-update and it has circular conclict with ncurses....
+		try emerge --autounmask-write=y --autounmask=y --noreplace games-util/steam-launcher && echo "-3\nyes\nyes" | etc-update && emerge USE="-ncurses" --noreplace games-util/steam-launcher && emerge USE="-gpm" --noreplace ncurses
 	fi
-
-	try emerge --autounmask-continue=y games-util/steam-launcher
 
 	einfo "Preparing to install snapd"
-	if ! file_has_string "sys-apps/systemd" /etc/portage/package.use; then
-		echo "sys-apps/systemd policykit apparmor" >> /etc/portage/package.use || die "Could not add sys-apps/systemd pol... to package.use"
-		echo "sys-libs/libseccomp static-libs" >> /etc/portage/package.use || die "Could not add sys-libs/libseccomp stat... to package.use"
-	fi
-
-	if ! file_has_string "sys-libs/libapparmor ~amd64" /etc/portage/package.accept_keywords; then
-		echo "sys-libs/libapparmor ~amd64" >> /etc/portage/package.accept_keywords || die "Could not add libappamor to accept_keywords"
-		echo "sys-apps/apparmor ~amd64" >> /etc/portage/package.accept_keywords || die "Could not add apparmor to accept_keywords"
-		echo "app-containers/snapd ~amd64" >> /etc/portage/package.accept_keywords || die "Could not add snapd to accept_keywords"
+	if ! file_has_string "sys-apps/systemd" /etc/portage/package.use/systemd; then
+		echo "sys-apps/systemd policykit apparmor" >> /etc/portage/package.use/systemd || die "Could not add sys-apps/systemd pol... to package.use"
+		echo "sys-libs/libseccomp static-libs" >> /etc/portage/package.use/systemd || die "Could not add sys-libs/libseccomp stat... to package.use"
 	fi
 
 	einfo "Installing system and apparmor"
-	try --autounmask-continue=y sys-apps/systemd sys-apps/apparmor
+	try emerge --autounmask-continue=y --noreplace sys-apps/systemd sys-apps/apparmor
 
 	einfo "Modifying grub bootloader"
 	if ! file_has_string 'GRUB_CMDLINE_LINUX_DEFAULT="apparmor=1 security=apparmor"' /etc/default/grub; then
@@ -105,7 +101,17 @@ function first_boot() {
 	try grub-mkconfig -o /boot/grub/grub.cfg
 
 	einfo "Installing snapd"
-	try emerge --autounmask-continue=y app-containers/snapd
+	try emerge --autounmask-continue=y --noreplace app-containers/snapd
+
+	if ! file_has_string "sys-fs/squashfs" /etc/portage/package.use/squashtools; then
+		einfo "Add flags to squashtools"
+		echo "sys-fs/squashfs-tools lz4 lzma lzo xattr zstd" >> /etc/portage/package.use/squashtools || die "Could not modify package.use/squashtools"
+
+		try emerge --changed-use --deep sys-fs/squashfs-tools
+
+		einfo "Creating snap link on /snap"
+		try ln -s /var/lib/snapd/snap /snap
+	fi
 
 	einfo "Enabling snapd on systemd"
 	systemctl enable --now snapd
@@ -116,6 +122,8 @@ function first_boot() {
 }
 
 function post_install() {
+
+
 	einfo "Installing mailspring"
 	try snap install mailspring
 
