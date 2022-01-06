@@ -42,8 +42,8 @@ function configure_base_system() {
 			|| die "Could not write /etc/locale.conf"
 
 		einfo "Selecting timezone"
-		ln -sfn "../usr/share/zoneinfo/$TIMEZONE" /etc/localtime \
-			|| die "Could not change /etc/localtime link"
+		rm -rf /etc/localtime
+		ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime || die "Could not change /etc/localtime link"
 	else
 		# Set hostname
 		einfo "Selecting hostname"
@@ -406,6 +406,8 @@ EOF
 
 	# Install kernel and initramfs
 	install_kernel
+
+
 }
 
 

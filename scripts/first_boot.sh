@@ -2,12 +2,14 @@
 source "$GENTOO_INSTALL_REPO_DIR/scripts/protection.sh" || exit 1
 
 ACCEPT_LICENSE="*"
-PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers"
+PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-sound/pulseaudio"
 VIDEO_CARDS="intel nvidia"
-USE="X suid xvmc nvidia"
+USE="X suid xvmc nvidia pulseaudio"
 INPUT_DEVICES="libinput"
 
 DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/dolphin-plugins-git kde-apps/kalgebra kde-apps/kcalc kde-apps/konsole kde-apps/kde-dev-utils kde-apps/kmouth kde-apps/kmplot kde-apps/kompare kde-apps/krdc kde-apps/spectacle app-text/foliate www-client/firefox kde-apps/filelight kde-plasma/plasma-nm kde-misc/latte-dock")
+
+QEMU_PACKAGES=("app-emulation/qemu app-emulation/libvirt net-misc/bridge-utils app-emulation/virt-manager app-emulation/virt-viewer app-emulation/spice-vdagent")
 
 function first_boot() {
 	einfo "Selecting profile default/linux/amd64/17.1/desktop/plasma/systemd"
@@ -123,7 +125,6 @@ function first_boot() {
 
 function post_install() {
 
-
 	einfo "Installing mailspring"
 	try snap install mailspring
 
@@ -142,5 +143,12 @@ function post_install() {
 	einfo "Installing OBS Studio"
 	try snap install obs-studio
 
+	einfo "Try install qemu"
+	if ! file_has_string "app-emulation/qemu" /etc/portage/package.use/emulation; then
+		echo "app-emulation/qemu spice usb pulseaudio usbredir vhost-net vhost-user-fs" >> 
+	fi
 
+	try emerge --noreplace --autouunmask-write=y --autounmask=y -- "${QEMU_PACKAGES[@]}"
+	try echo "-3\nyes" | etc-update
+	try emerge --noreplace -- "${QEMU_PACKAGES[@]}"
 }
