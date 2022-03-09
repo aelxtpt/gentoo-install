@@ -2,9 +2,9 @@
 source "$GENTOO_INSTALL_REPO_DIR/scripts/protection.sh" || exit 1
 
 ACCEPT_LICENSE="*"
-PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-sound/pulseaudio"
-VIDEO_CARDS="intel nvidia"
-USE="X suid xvmc nvidia pulseaudio"
+PACKAGES="x11-base/xorg-drivers x11-base/xorg-server media-sound/pulseaudio"
+VIDEO_CARDS="intel"
+USE="X suid xvmc pulseaudio"
 INPUT_DEVICES="libinput"
 
 DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/dolphin-plugins-git kde-apps/kalgebra kde-apps/kcalc kde-apps/konsole kde-apps/kde-dev-utils kde-apps/kmouth kde-apps/kmplot kde-apps/kompare kde-apps/krdc kde-apps/spectacle app-text/foliate www-client/firefox kde-apps/filelight kde-plasma/plasma-nm kde-misc/latte-dock")

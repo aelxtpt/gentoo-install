@@ -157,14 +157,18 @@ function get_cmdline() {
 
 function install_grub() {
 	# Add grub_platforms
+	einfo "Creating BOOT folder if does not exists"
+	try mkdir -p /boot/BOOT
+
 	einfo "Adding GRUB_PLATFORMS to make.conf"
 	echo 'GRUB_PLATFORMS="efi-64"' >> /etc/portage/make.conf \
 		|| die "Could not modify /etc/portage/make.conf"
 
 	try emerge --verbose sys-boot/grub
 
+	# alguns notebooks, como o da inteli, a bios requer o path em /BOOT
 	einfo "Installing grub"
-	try grub-install --target=x86_64-efi --efi-directory=/boot
+	try grub-install --target=x86_64-efi --efi-directory=/boot/BOOT
 
 	einfo "Configuring grub"
 	try grub-mkconfig -o /boot/grub/grub.cfg
@@ -224,22 +228,19 @@ function install_kernel() {
 	einfo "Setting kernel number"
 	try eselect kernel set 1
 
-	einfo "Copying kernel config"
-	try cp $GENTOO_INSTALL_REPO_DIR/kernel_config/config /usr/src/linux/
+	einfo "Installing GENKERNEL"
+	try emerge --verbose sys-kernel/genkernel
 
-	einfo "Renaming kernel config file"
-	try mv /usr/src/linux/config /usr/src/linux/.config
+	# Generate a valid fstab file
+	generate_fstab
 
 	einfo "Installing lzo lzop"
 	try emerge --verbose lzo lzop
 
 	einfo "Compiling kernel"
-	try cd /usr/src/linux && make -j6 && make modules_install && make install
+	try genkernel all
 
 	install_grub
-
-	# Generate a valid fstab file
-	generate_fstab
 
 	# Install gentoolkit
 	einfo "Installing gentoolkit"
@@ -304,7 +305,7 @@ function generate_fstab() {
 		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_ROOT")" "/" "$DISK_ID_ROOT_TYPE" "$DISK_ID_ROOT_MOUNT_OPTS" "0 1"
 	fi
 	if [[ $IS_EFI == "true" ]]; then
-		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_EFI")" "/boot" "vfat" "defaults,noatime,fmask=0177,dmask=0077,noexec,nodev,nosuid,discard" "0 2"
+		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_EFI")" "/boot/BOOT" "vfat" "defaults,noatime,fmask=0177,dmask=0077,noexec,nodev,nosuid,discard" "0 2"
 	else
 		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_BIOS")" "/boot/bios" "vfat" "defaults,noatime,fmask=0177,dmask=0077,noexec,nodev,nosuid,discard" "0 2"
 	fi
@@ -406,7 +407,6 @@ EOF
 
 	# Install kernel and initramfs
 	install_kernel
-
 
 }
 

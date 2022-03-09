@@ -827,9 +827,9 @@ function download_stage3() {
 			|| die "Could not import gentoo gpg key"
 
 		# Verify DIGESTS signature
-		einfo "Verifying DIGEST.asc signature"
-		gpg --quiet --verify "${CURRENT_STAGE3}.DIGESTS.asc" \
-			|| die "Signature of '${CURRENT_STAGE3}.DIGESTS.asc' invalid!"
+		#einfo "Verifying DIGEST.asc signature"
+		#gpg --quiet --verify "${CURRENT_STAGE3}.DIGESTS.asc" \
+		#	|| die "Signature of '${CURRENT_STAGE3}.DIGESTS.asc' invalid!"
 
 		# Check hashes
 
