@@ -90,6 +90,10 @@ function configure_portage() {
 		einfo "Adding ~$GENTOO_ARCH to ACCEPT_KEYWORDS"
 		echo "ACCEPT_KEYWORDS=\"~$GENTOO_ARCH\"" >> /etc/portage/make.conf \
 			|| die "Could not modify /etc/portage/make.conf"
+
+		einfo "Adding makeopts to make.conf"
+		echo "MAKEOPTS=\"-j6\"" >> /etc/portage/make.conf \
+			|| die "Could not modify /etc/portage/make.conf"
 	fi
 }
 
@@ -219,7 +223,7 @@ function install_kernel_bios() {
 function install_kernel() {
 	# Install vanilla kernel
 	einfo "Installing vanilla kernel and related tools"
-	try emerge --verbose sys-kernel/gentoo-sources
+	try emerge --verbose sys-kernel/gentoo-sources sys-kernel/linux-firmware
 
 	einfo "Setting kernel number"
 	try eselect kernel set 1
@@ -228,7 +232,7 @@ function install_kernel() {
 	try cp $GENTOO_INSTALL_REPO_DIR/kernel_config/config /usr/src/linux/
 
 	einfo "Renaming kernel config file"
-	try mv /usr/src/linux/config /usr/src/linux/.config
+	try mv /usr/src/linux/config /usr/src/linux/.config && chmod 777 /usr/src/linux/.config
 
 	einfo "Installing lzo lzop"
 	try emerge --verbose lzo lzop

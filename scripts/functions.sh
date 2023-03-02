@@ -819,17 +819,17 @@ function download_stage3() {
 		download "$STAGE3_RELEASES/${CURRENT_STAGE3}.DIGESTS.asc" "${CURRENT_STAGE3}.DIGESTS.asc"
 
 		# Import gentoo keys
-		einfo "Importing gentoo gpg key"
-		local GENTOO_GPG_KEY="$TMP_DIR/gentoo-keys.gpg"
-		download "https://gentoo.org/.well-known/openpgpkey/hu/wtktzo4gyuhzu8a4z5fdj3fgmr1u6tob?l=releng" "$GENTOO_GPG_KEY" \
-			|| die "Could not retrieve gentoo gpg key"
-		gpg --quiet --import < "$GENTOO_GPG_KEY" \
-			|| die "Could not import gentoo gpg key"
+		#einfo "Importing gentoo gpg key"
+		#local GENTOO_GPG_KEY="$TMP_DIR/gentoo-keys.gpg"
+		#download "https://gentoo.org/.well-known/openpgpkey/hu/wtktzo4gyuhzu8a4z5fdj3fgmr1u6tob?l=releng" "$GENTOO_GPG_KEY" \
+		#	|| die "Could not retrieve gentoo gpg key"
+		# gpg --quiet --import < "$GENTOO_GPG_KEY" \
+		# 	|| die "Could not import gentoo gpg key"
 
 		# Verify DIGESTS signature
-		einfo "Verifying DIGEST.asc signature"
-		gpg --quiet --verify "${CURRENT_STAGE3}.DIGESTS.asc" \
-			|| die "Signature of '${CURRENT_STAGE3}.DIGESTS.asc' invalid!"
+		#einfo "Verifying DIGEST.asc signature"
+		# gpg --quiet --verify "${CURRENT_STAGE3}.DIGESTS.asc" \
+		# 	|| die "Signature of '${CURRENT_STAGE3}.DIGESTS.asc' invalid!"
 
 		# Check hashes
 

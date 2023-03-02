@@ -361,13 +361,13 @@ function load_default_config() {
 	PORTAGE_GIT_FULL_HISTORY=false
 	PORTAGE_GIT_MIRROR="https://anongit.gentoo.org/git/repo/sync/gentoo.git"
 
-	GENTOO_MIRROR="https://mirror.eu.oneandone.net/linux/distributions/gentoo/gentoo"
+	GENTOO_MIRROR="https://gentoo.c3sl.ufpr.br"
 	GENTOO_ARCH="amd64"
 
 	SELECT_MIRRORS=true
 	SELECT_MIRRORS_LARGE_FILE=false
 
-	ADDITIONAL_PACKAGES=()
+	ADDITIONAL_PACKAGES=("sys-kernel/linux-firmware")
 	INSTALL_SSHD=true
 	ROOT_SSH_AUTHORIZED_KEYS=""
 
