@@ -329,6 +329,40 @@ function install_grub() {
 	fi
 }
 
+function ensure_boot_space() {
+	local boot_dir="$1"
+	local min_mb="${2:-100}"
+
+	local free_mb
+	free_mb="$(df -Pm "$boot_dir" 2>/dev/null | awk 'NR==2 {print $4}')" || free_mb=""
+	if [[ -z "$free_mb" ]]; then
+		ewarn "Could not determine free space on $boot_dir"
+		return 0
+	fi
+
+	if [[ "$free_mb" -ge "$min_mb" ]]; then
+		return 0
+	fi
+
+	ewarn "Low space on $boot_dir (${free_mb}MB free, need ${min_mb}MB). Cleaning old initramfs files."
+	shopt -s nullglob
+	local imgs=("$boot_dir"/initramfs-*.img "$boot_dir"/initramfs.img)
+	local img
+	for img in "${imgs[@]}"; do
+		[[ -e "$img" ]] || continue
+		rm -f -- "$img" || true
+		free_mb="$(df -Pm "$boot_dir" 2>/dev/null | awk 'NR==2 {print $4}')" || free_mb=""
+		if [[ -n "$free_mb" ]] && [[ "$free_mb" -ge "$min_mb" ]]; then
+			break
+		fi
+	done
+	shopt -u nullglob
+
+	if [[ -n "$free_mb" ]] && [[ "$free_mb" -lt "$min_mb" ]]; then
+		die "Not enough free space on $boot_dir (have ${free_mb}MB, need ${min_mb}MB)"
+	fi
+}
+
 function generate_syslinux_cfg() {
 	cat <<EOF
 DEFAULT gentoo
@@ -452,6 +486,8 @@ function install_kernel() {
 	local boot_dir="/boot"
 	local kernel_img="$boot_dir/vmlinuz-$kver"
 	local initramfs_img="$boot_dir/initramfs-$kver.img"
+
+	ensure_boot_space "$boot_dir" 100
 
 	# Some installkernel implementations drop unversioned files; fix up names.
 	if [[ ! -e "$kernel_img" ]]; then
