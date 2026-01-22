@@ -259,11 +259,22 @@ function install_grub() {
 
 	try emerge --verbose sys-boot/grub
 
+	if [[ $IS_EFI == "true" ]]; then
+		mountpoint -q -- "/boot" \
+			|| die "/boot is not mounted; cannot install grub"
+	else
+		mountpoint -q -- "/boot/bios" \
+			|| die "/boot/bios is not mounted; cannot install grub"
+	fi
+
 	einfo "Installing grub (target: $grub_target)"
 	try grub-install --target="$grub_target" --efi-directory=/boot
 
 	einfo "Configuring grub"
 	try grub-mkconfig -o /boot/grub/grub.cfg
+
+	[[ -s /boot/grub/grub.cfg ]] \
+		|| die "grub.cfg was not created; aborting"
 }
 
 function generate_syslinux_cfg() {
