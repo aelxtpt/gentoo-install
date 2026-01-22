@@ -160,15 +160,20 @@ function get_cmdline() {
 }
 
 function install_grub() {
+	local grub_platform
+	local grub_target
+	grub_platform="$(get_grub_platform)"
+	grub_target="$(get_grub_target)"
+
 	# Add grub_platforms
-	einfo "Adding GRUB_PLATFORMS to make.conf"
-	echo 'GRUB_PLATFORMS="efi-64"' >> /etc/portage/make.conf \
+	einfo "Adding GRUB_PLATFORMS to make.conf (platform: $grub_platform)"
+	echo "GRUB_PLATFORMS=\"$grub_platform\"" >> /etc/portage/make.conf \
 		|| die "Could not modify /etc/portage/make.conf"
 
 	try emerge --verbose sys-boot/grub
 
-	einfo "Installing grub"
-	try grub-install --target=x86_64-efi --efi-directory=/boot
+	einfo "Installing grub (target: $grub_target)"
+	try grub-install --target="$grub_target" --efi-directory=/boot
 
 	einfo "Configuring grub"
 	try grub-mkconfig -o /boot/grub/grub.cfg
@@ -221,6 +226,10 @@ function install_kernel_bios() {
 }
 
 function install_kernel() {
+	# Set defaults if not defined in config
+	: "${KERNEL_CONFIG_SOURCE:=current}"
+	: "${KERNEL_MAKE_JOBS:=$(nproc)}"
+
 	# Install vanilla kernel
 	einfo "Installing vanilla kernel and related tools"
 	try emerge --verbose sys-kernel/gentoo-sources sys-kernel/linux-firmware
@@ -228,17 +237,49 @@ function install_kernel() {
 	einfo "Setting kernel number"
 	try eselect kernel set 1
 
-	einfo "Copying kernel config"
-	try cp $GENTOO_INSTALL_REPO_DIR/kernel_config/config /usr/src/linux/
+	# Determine architecture-specific kernel config path
+	local kernel_config_file="$GENTOO_INSTALL_REPO_DIR/kernel_config/config-${GENTOO_ARCH:-amd64}"
 
-	einfo "Renaming kernel config file"
-	try mv /usr/src/linux/config /usr/src/linux/.config && chmod 777 /usr/src/linux/.config
+	# Copy kernel configuration based on selected source
+	einfo "Configuring kernel (source: $KERNEL_CONFIG_SOURCE, arch: ${GENTOO_ARCH:-amd64})"
+	case "$KERNEL_CONFIG_SOURCE" in
+		current)
+			if [[ -f /proc/config.gz ]]; then
+				einfo "Extracting config from /proc/config.gz"
+				try zcat /proc/config.gz > /usr/src/linux/.config
+			elif [[ -f "/boot/config-$(uname -r)" ]]; then
+				einfo "Copying config from /boot/config-$(uname -r)"
+				try cp "/boot/config-$(uname -r)" /usr/src/linux/.config
+			else
+				ewarn "Running kernel config not found, falling back to provided"
+				if [[ -f "$kernel_config_file" ]]; then
+					try cp "$kernel_config_file" /usr/src/linux/.config
+				else
+					die "No kernel config available for architecture: ${GENTOO_ARCH:-amd64}"
+				fi
+			fi
+			einfo "Running make olddefconfig for new kernel version"
+			try cd /usr/src/linux && make olddefconfig
+			;;
+		provided)
+			einfo "Using provided kernel config for ${GENTOO_ARCH:-amd64}"
+			if [[ -f "$kernel_config_file" ]]; then
+				try cp "$kernel_config_file" /usr/src/linux/.config
+			else
+				die "No kernel config available for architecture: ${GENTOO_ARCH:-amd64}"
+			fi
+			;;
+		*)
+			die "Invalid KERNEL_CONFIG_SOURCE: $KERNEL_CONFIG_SOURCE"
+			;;
+	esac
+	try chmod 644 /usr/src/linux/.config
 
 	einfo "Installing lzo lzop"
 	try emerge --verbose lzo lzop
 
-	einfo "Compiling kernel"
-	try cd /usr/src/linux && make -j6 && make modules_install && make install
+	einfo "Compiling kernel with $KERNEL_MAKE_JOBS parallel jobs"
+	try cd /usr/src/linux && make -j"$KERNEL_MAKE_JOBS" && make modules_install && make install
 
 	install_grub
 
@@ -312,7 +353,7 @@ function generate_fstab() {
 	else
 		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_BIOS")" "/boot/bios" "vfat" "defaults,noatime,fmask=0177,dmask=0077,noexec,nodev,nosuid,discard" "0 2"
 	fi
-	if [[ -v "DISK_ID_SWAP" ]]; then
+	if [[ -n "${DISK_ID_SWAP:-}" ]]; then
 		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_SWAP")" "none" "swap" "defaults,discard" "0 0"
 	fi
 }

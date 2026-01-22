@@ -12,8 +12,9 @@ DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app
 QEMU_PACKAGES=("app-emulation/qemu app-emulation/libvirt net-misc/bridge-utils app-emulation/virt-manager app-emulation/virt-viewer app-emulation/spice-vdagent")
 
 function first_boot() {
-	einfo "Selecting profile default/linux/amd64/17.1/desktop/plasma/systemd"
-    try eselect profile set default/linux/amd64/17.1/desktop/plasma/systemd
+	local profile="default/linux/${GENTOO_ARCH:-amd64}/23.0/desktop/plasma/systemd"
+	einfo "Selecting profile $profile"
+	try eselect profile set "$profile"
 
     if ask "I Should add VIDEO_CARDS, USE, INPUT_DEVICES, ACCEPT_LICENSE on make.conf ?"; then
     	echo "ACCEPT_LICENSE=\"$ACCEPT_LICENSE\"" >> /etc/portage/make.conf \

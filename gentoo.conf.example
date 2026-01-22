@@ -219,8 +219,13 @@ PORTAGE_GIT_MIRROR="https://anongit.gentoo.org/git/repo/sync/gentoo.git"
 GENTOO_MIRROR="https://mirror.eu.oneandone.net/linux/distributions/gentoo/gentoo"
 #GENTOO_MIRROR="https://distfiles.gentoo.org"
 
-# The architecture of the target system (only tested with amd64)
-GENTOO_ARCH="amd64"
+# The architecture of the target system
+# Supported: amd64, arm64, x86, arm
+# Default: auto-detect from running system
+# To override, uncomment and set manually:
+#GENTOO_ARCH="amd64"
+#GENTOO_ARCH="arm64"
+GENTOO_ARCH="$(detect_architecture)"
 
 # The stage3 tarball to install
 STAGE3_BASENAME="stage3-$GENTOO_ARCH-systemd"
@@ -236,6 +241,23 @@ SELECT_MIRRORS=true
 # from each mirror for more accurate test results. This can
 # take significantly longer (~5-10min).
 SELECT_MIRRORS_LARGE_FILE=false
+
+
+################################################
+# Kernel configuration
+
+# Source of kernel configuration
+# Options:
+#   "current"  - Use running kernel config (recommended for live ISOs)
+#                Copies /proc/config.gz or /boot/config-$(uname -r)
+#                Ensures all drivers for current hardware are included
+#   "provided" - Use static config from kernel_config/config
+#                Good for reproducible builds or known hardware
+KERNEL_CONFIG_SOURCE="current"
+
+# Number of parallel jobs for kernel compilation
+# Default: number of CPU cores
+KERNEL_MAKE_JOBS="$(nproc)"
 
 
 ################################################

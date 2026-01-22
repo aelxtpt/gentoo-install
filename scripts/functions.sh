@@ -3,6 +3,55 @@ source "$GENTOO_INSTALL_REPO_DIR/scripts/protection.sh" || exit 1
 
 
 ################################################
+# Architecture Detection and Mapping Functions
+
+# Detect system architecture and return Gentoo arch name
+function detect_architecture() {
+	local arch
+	arch="$(uname -m)"
+	case "$arch" in
+		x86_64|amd64)      echo "amd64" ;;
+		aarch64|arm64)     echo "arm64" ;;
+		i?86|x86)          echo "x86" ;;
+		armv7*|armhf)      echo "arm" ;;
+		*)                 die "Unsupported architecture: $arch" ;;
+	esac
+}
+
+# Get GRUB platform for current architecture
+function get_grub_platform() {
+	case "${GENTOO_ARCH:-amd64}" in
+		amd64) echo "efi-64" ;;
+		arm64) echo "efi-arm64" ;;
+		x86)   echo "efi-32" ;;
+		arm)   echo "efi-arm" ;;
+		*)     die "Unknown architecture for GRUB platform: $GENTOO_ARCH" ;;
+	esac
+}
+
+# Get GRUB install target for current architecture
+function get_grub_target() {
+	case "${GENTOO_ARCH:-amd64}" in
+		amd64) echo "x86_64-efi" ;;
+		arm64) echo "arm64-efi" ;;
+		x86)   echo "i386-efi" ;;
+		arm)   echo "arm-efi" ;;
+		*)     die "Unknown architecture for GRUB target: $GENTOO_ARCH" ;;
+	esac
+}
+
+# Get QEMU system binary name for current architecture
+function get_qemu_system() {
+	case "${GENTOO_ARCH:-amd64}" in
+		amd64) echo "qemu-system-x86_64" ;;
+		arm64) echo "qemu-system-aarch64" ;;
+		x86)   echo "qemu-system-i386" ;;
+		arm)   echo "qemu-system-arm" ;;
+		*)     die "Unknown architecture for QEMU: $GENTOO_ARCH" ;;
+	esac
+}
+
+################################################
 # Functions
 
 function sync_time() {
@@ -32,21 +81,21 @@ function check_config() {
 	[[ $HOSTNAME =~ $hostname_regex ]] \
 		|| die "'$HOSTNAME' is not a valid hostname"
 
-	[[ -v "DISK_ID_ROOT" && -n $DISK_ID_ROOT ]] \
+	[[ -n "${DISK_ID_ROOT:-}" ]] \
 		|| die "You must assign DISK_ID_ROOT"
-	[[ -v "DISK_ID_EFI" && -n $DISK_ID_EFI ]] || [[ -v "DISK_ID_BIOS" && -n $DISK_ID_BIOS ]] \
+	[[ -n "${DISK_ID_EFI:-}" ]] || [[ -n "${DISK_ID_BIOS:-}" ]] \
 		|| die "You must assign DISK_ID_EFI or DISK_ID_BIOS"
 
-	[[ -v "DISK_ID_BIOS" ]] && [[ ! -v "DISK_ID_TO_UUID[$DISK_ID_BIOS]" ]] \
+	[[ -n "${DISK_ID_BIOS:-}" ]] && [[ -z "${DISK_ID_TO_UUID[$DISK_ID_BIOS]:-}" ]] \
 		&& die "Missing uuid for DISK_ID_BIOS, have you made sure it is used?"
-	[[ -v "DISK_ID_EFI" ]] && [[ ! -v "DISK_ID_TO_UUID[$DISK_ID_EFI]" ]] \
+	[[ -n "${DISK_ID_EFI:-}" ]] && [[ -z "${DISK_ID_TO_UUID[$DISK_ID_EFI]:-}" ]] \
 		&& die "Missing uuid for DISK_ID_EFI, have you made sure it is used?"
-	[[ -v "DISK_ID_SWAP" ]] && [[ ! -v "DISK_ID_TO_UUID[$DISK_ID_SWAP]" ]] \
+	[[ -n "${DISK_ID_SWAP:-}" ]] && [[ -z "${DISK_ID_TO_UUID[$DISK_ID_SWAP]:-}" ]] \
 		&& die "Missing uuid for DISK_ID_SWAP, have you made sure it is used?"
-	[[ -v "DISK_ID_ROOT" ]] && [[ ! -v "DISK_ID_TO_UUID[$DISK_ID_ROOT]" ]] \
+	[[ -n "${DISK_ID_ROOT:-}" ]] && [[ -z "${DISK_ID_TO_UUID[$DISK_ID_ROOT]:-}" ]] \
 		&& die "Missing uuid for DISK_ID_ROOT, have you made sure it is used?"
 
-	if [[ -v "DISK_ID_EFI" ]]; then
+	if [[ -n "${DISK_ID_EFI:-}" ]]; then
 		IS_EFI=true
 	else
 		IS_EFI=false
@@ -156,7 +205,7 @@ function add_summary_entry() {
 
 function summary_color_args() {
 	for arg in "$@"; do
-		if [[ -v "arguments[$arg]" ]]; then
+		if [[ -n "${arguments[$arg]+x}" ]]; then
 			printf '%-28s ' "[1;34m$arg[2m=[m${arguments[$arg]}"
 		fi
 	done
@@ -165,7 +214,7 @@ function summary_color_args() {
 function disk_create_gpt() {
 	local new_id="${arguments[new_id]}"
 	if [[ ${disk_action_summarize_only-false} == "true" ]]; then
-		if [[ -v arguments[id] ]]; then
+		if [[ -n "${arguments[id]+x}" ]]; then
 			add_summary_entry "${arguments[id]}" "$new_id" "gpt" "" ""
 		else
 			add_summary_entry __root__ "$new_id" "${arguments[device]}" "(gpt)" ""
@@ -175,7 +224,7 @@ function disk_create_gpt() {
 
 	local device
 	local device_desc=""
-	if [[ -v arguments[id] ]]; then
+	if [[ -n "${arguments[id]+x}" ]]; then
 		device="$(resolve_device_by_id "${arguments[id]}")"
 		device_desc="$device ($id)"
 	else
@@ -282,7 +331,7 @@ function disk_create_luks() {
 	local new_id="${arguments[new_id]}"
 	local name="${arguments[name]}"
 	if [[ ${disk_action_summarize_only-false} == "true" ]]; then
-		if [[ -v arguments[id] ]]; then
+		if [[ -n "${arguments[id]+x}" ]]; then
 			add_summary_entry "${arguments[id]}" "$new_id" "luks" "" ""
 		else
 			add_summary_entry __root__ "$new_id" "${arguments[device]}" "(luks)" ""
@@ -292,7 +341,7 @@ function disk_create_luks() {
 
 	local device
 	local device_desc=""
-	if [[ -v arguments[id] ]]; then
+	if [[ -n "${arguments[id]+x}" ]]; then
 		device="$(resolve_device_by_id "${arguments[id]}")"
 		device_desc="$device ($id)"
 	else
@@ -373,7 +422,7 @@ function disk_format() {
 
 	case "$type" in
 		'bios'|'efi')
-			if [[ -v "arguments[label]" ]]; then
+			if [[ -n "${arguments[label]+x}" ]]; then
 				mkfs.vfat -F 32 -n "$label" "$device" \
 					|| die "Could not format device '$device' ($id)"
 			else
@@ -382,7 +431,7 @@ function disk_format() {
 			fi
 			;;
 		'swap')
-			if [[ -v "arguments[label]" ]]; then
+			if [[ -n "${arguments[label]+x}" ]]; then
 				mkswap -L "$label" "$device" \
 					|| die "Could not format device '$device' ($id)"
 			else
@@ -391,7 +440,7 @@ function disk_format() {
 			fi
 			;;
 		'ext4')
-			if [[ -v "arguments[label]" ]]; then
+			if [[ -n "${arguments[label]+x}" ]]; then
 				mkfs.ext4 -q -L "$label" "$device" \
 					|| die "Could not format device '$device' ($id)"
 			else
@@ -400,7 +449,7 @@ function disk_format() {
 			fi
 			;;
 		'btrfs')
-			if [[ -v "arguments[label]" ]]; then
+			if [[ -n "${arguments[label]+x}" ]]; then
 				mkfs.btrfs -q -L "$label" "$device" \
 					|| die "Could not format device '$device' ($id)"
 			else
@@ -543,11 +592,11 @@ function disk_format_btrfs() {
 
 	# Collect extra arguments
 	extra_args=()
-	if [[ "${#devices}" -gt 1 ]] && [[ -v "arguments[raid_type]" ]]; then
+	if [[ "${#devices}" -gt 1 ]] && [[ -n "${arguments[raid_type]+x}" ]]; then
 		extra_args+=("-d" "$raid_type")
 	fi
 
-	if [[ -v "arguments[label]" ]]; then
+	if [[ -n "${arguments[label]+x}" ]]; then
 		extra_args+=("-L" "$label")
 	fi
 
@@ -626,7 +675,7 @@ function print_summary_tree() {
 	local depth="$((depth + 1))"
 	local has_children=false
 
-	if [[ -v "summary_tree[$root]" ]]; then
+	if [[ -n "${summary_tree[$root]+x}" ]]; then
 		local children="${summary_tree[$root]}"
 		has_children=true
 		summary_depth_continues[$depth]=true
@@ -794,7 +843,7 @@ function download_stage3() {
 	cd "$TMP_DIR" \
 		|| die "Could not cd into '$TMP_DIR'"
 
-	local STAGE3_RELEASES="$GENTOO_MIRROR/releases/amd64/autobuilds/current-$STAGE3_BASENAME/"
+	local STAGE3_RELEASES="$GENTOO_MIRROR/releases/$GENTOO_ARCH/autobuilds/current-$STAGE3_BASENAME/"
 
 	# Download upstream list of files
 	CURRENT_STAGE3="$(download_stdout "$STAGE3_RELEASES")" \
