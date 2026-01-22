@@ -56,7 +56,27 @@ function get_qemu_system() {
 
 function sync_time() {
 	einfo "Syncing time"
-	try ntpd -g -q
+	local ntp_servers=()
+	local ntp_decl=""
+	if ntp_decl="$(declare -p NTP_SERVERS 2>/dev/null)"; then
+		if [[ $ntp_decl == "declare -a "* ]]; then
+			ntp_servers=("${NTP_SERVERS[@]}")
+		else
+			read -r -a ntp_servers <<< "${NTP_SERVERS-}"
+		fi
+	fi
+
+	if [[ ${#ntp_servers[@]} -eq 0 ]]; then
+		ntp_servers=(br.pool.ntp.org pool.ntp.br)
+	fi
+
+	einfo "Using NTP servers: ${ntp_servers[*]}"
+	local ntpd_cmd=(ntpd -g -q)
+	local server
+	for server in "${ntp_servers[@]}"; do
+		ntpd_cmd+=("-p" "$server")
+	done
+	try "${ntpd_cmd[@]}"
 
 	einfo "Current date: $(LANG=C date)"
 	einfo "Writing time to hardware clock"
