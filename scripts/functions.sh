@@ -736,6 +736,213 @@ function apply_disk_actions() {
 	done
 }
 
+function lsblk_pair_value() {
+	local line="$1"
+	local key="$2"
+	local val
+	val="${line#*$key=\"}"
+	[[ $val == "$line" ]] && { echo -n ""; return; }
+	val="${val%%\"*}"
+	echo -n "$val"
+}
+
+function trim_whitespace() {
+	local val="$1"
+	val="${val#"${val%%[![:space:]]*}"}"
+	val="${val%"${val##*[![:space:]]}"}"
+	echo -n "$val"
+}
+
+function release_disk_users() {
+	local device="$1"
+	local lsblk_output
+	lsblk_output="$(lsblk --all --paths --pairs --output NAME,TYPE,FSTYPE,MOUNTPOINTS --noheadings "$device")" \
+		|| die "Error while executing lsblk for $device"
+
+	local devs=()
+	local mountpoints=()
+	local lvm_devs=()
+	local other_devs=()
+	local line
+	while IFS="" read -r line; do
+		local name
+		local type
+		local fstype
+		local mps
+		name="$(lsblk_pair_value "$line" "NAME")"
+		type="$(lsblk_pair_value "$line" "TYPE")"
+		fstype="$(lsblk_pair_value "$line" "FSTYPE")"
+		mps="$(lsblk_pair_value "$line" "MOUNTPOINTS")"
+
+		[[ -z "$name" ]] && continue
+		[[ "$name" == "$device" ]] && continue
+
+		devs+=("$name")
+
+		if [[ -n "$mps" ]]; then
+			local mp
+			local mps_list=()
+			IFS=',' read -r -a mps_list <<< "$mps"
+			for mp in "${mps_list[@]}"; do
+				[[ -n "$mp" ]] && mountpoints+=("$mp")
+			done
+		fi
+
+		if [[ "$type" == "lvm" ]]; then
+			lvm_devs+=("$name")
+		elif [[ "$type" == "crypt" || "$type" == "raid" || "$type" == "md" || "$type" == "dm" ]]; then
+			other_devs+=("$name")
+		fi
+	done < <(printf '%s\n' "$lsblk_output")
+
+	declare -A dev_map
+	local dev
+	for dev in "${devs[@]}"; do
+		dev_map["$dev"]=true
+		if [[ -e "$dev" ]]; then
+			local resolved
+			resolved="$(readlink -f "$dev" 2>/dev/null || true)"
+			[[ -n "$resolved" ]] && dev_map["$resolved"]=true
+		fi
+	done
+
+	local swap_devs=()
+	if type swapon &>/dev/null; then
+		local swap
+		while IFS="" read -r swap; do
+			[[ -z "$swap" ]] && continue
+			if [[ -n "${dev_map[$swap]+x}" ]]; then
+				swap_devs+=("$swap")
+			fi
+		done < <(swapon --noheadings --show=NAME 2>/dev/null || true)
+	fi
+
+	if [[ ${#mountpoints[@]} -eq 0 ]] \
+		&& [[ ${#swap_devs[@]} -eq 0 ]] \
+		&& [[ ${#lvm_devs[@]} -eq 0 ]] \
+		&& [[ ${#other_devs[@]} -eq 0 ]]; then
+		return 0
+	fi
+
+	ewarn "Target disk appears to be in use: $device"
+	[[ ${#mountpoints[@]} -gt 0 ]] \
+		&& ewarn "Mounted filesystems: ${mountpoints[*]}"
+	[[ ${#swap_devs[@]} -gt 0 ]] \
+		&& ewarn "Active swap devices: ${swap_devs[*]}"
+	[[ ${#lvm_devs[@]} -gt 0 ]] \
+		&& ewarn "LVM devices: ${lvm_devs[*]}"
+	[[ ${#other_devs[@]} -gt 0 ]] \
+		&& ewarn "Other mapped devices: ${other_devs[*]}"
+	[[ ${#other_devs[@]} -gt 0 ]] \
+		&& ewarn "Non-LVM mapped devices may need manual cleanup if partitioning fails."
+
+	ask "Attempt to unmount and deactivate swap/LVM for $device?" \
+		|| die "Aborted because target disk is in use."
+
+	if [[ ${#mountpoints[@]} -gt 0 ]]; then
+		local mp
+		for mp in "${mountpoints[@]}"; do
+			if type mountpoint &>/dev/null; then
+				mountpoint -q -- "$mp" || continue
+			fi
+			umount "$mp" \
+				|| die "Could not unmount $mp"
+		done
+	fi
+
+	if [[ ${#swap_devs[@]} -gt 0 ]]; then
+		local swap
+		for swap in "${swap_devs[@]}"; do
+			swapoff "$swap" \
+				|| die "Could not disable swap on $swap"
+		done
+	fi
+
+	if [[ ${#lvm_devs[@]} -gt 0 ]]; then
+		declare -A lvm_dev_map
+		local dev
+		for dev in "${lvm_devs[@]}"; do
+			lvm_dev_map["$dev"]=true
+			if [[ -e "$dev" ]]; then
+				local resolved
+				resolved="$(readlink -f "$dev" 2>/dev/null || true)"
+				[[ -n "$resolved" ]] && lvm_dev_map["$resolved"]=true
+			fi
+		done
+
+		if type lvs &>/dev/null && type vgchange &>/dev/null; then
+			declare -A vgs
+			local vg_lv
+			while IFS="" read -r vg_lv; do
+				local vg
+				local lvpath
+				vg="$(trim_whitespace "${vg_lv%%|*}")"
+				lvpath="$(trim_whitespace "${vg_lv#*|}")"
+				[[ -z "$vg" || -z "$lvpath" ]] && continue
+				if [[ -n "${lvm_dev_map[$lvpath]+x}" ]]; then
+					vgs["$vg"]=true
+				elif [[ -e "$lvpath" ]]; then
+					local lvpath_resolved
+					lvpath_resolved="$(readlink -f "$lvpath" 2>/dev/null || true)"
+					[[ -n "$lvpath_resolved" ]] \
+						&& [[ -n "${lvm_dev_map[$lvpath_resolved]+x}" ]] \
+						&& vgs["$vg"]=true
+				else
+					continue
+				fi
+			done < <(lvs --noheadings --options vg_name,lv_path --separator '|' 2>/dev/null || true)
+
+			local vg
+			for vg in "${!vgs[@]}"; do
+				vgchange -an "$vg" \
+					|| die "Could not deactivate volume group $vg"
+			done
+		else
+			ewarn "lvm2 tools not found; skipping vgchange"
+		fi
+	fi
+
+	if [[ ${#lvm_devs[@]} -gt 0 ]] && type dmsetup &>/dev/null; then
+		local dm
+		for dm in "${lvm_devs[@]}"; do
+			[[ -e "$dm" ]] || continue
+			dmsetup remove -f "$dm" \
+				|| die "Could not remove device mapper $dm"
+		done
+	fi
+
+	partprobe "$device" \
+		|| die "Could not re-read partition table on $device"
+}
+
+function prepare_disks_for_partitioning() {
+	local param
+	local current_params=()
+	declare -A seen_devices
+	for param in "${DISK_ACTIONS[@]}"; do
+		if [[ $param == ';' ]]; then
+			unset known_arguments
+			unset arguments; declare -A arguments; parse_arguments "${current_params[@]}"
+			if [[ ${arguments[action]-} == "create_gpt" ]]; then
+				local device
+				if [[ -n "${arguments[id]+x}" ]]; then
+					device="$(resolve_device_by_id "${arguments[id]}")" \
+						|| die "Could not resolve device with id=${arguments[id]}"
+				else
+					device="${arguments[device]}"
+				fi
+				if [[ -n "$device" ]] && [[ -z "${seen_devices[$device]+x}" ]]; then
+					seen_devices["$device"]=true
+					release_disk_users "$device"
+				fi
+			fi
+			current_params=()
+		else
+			current_params+=("$param")
+		fi
+	done
+}
+
 function summarize_disk_actions() {
 	elog "[1mCurrent lsblk output:[m"
 	for_line_in <(lsblk \
@@ -765,6 +972,7 @@ function apply_disk_configuration() {
 
 	ask "Do you really want to apply this disk configuration?" \
 		|| die "Aborted"
+	prepare_disks_for_partitioning
 	countdown "Applying in " 5
 
 	einfo "Applying disk configuration"
