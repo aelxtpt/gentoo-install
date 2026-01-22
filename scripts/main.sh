@@ -459,6 +459,8 @@ function main_install_gentoo_in_chroot() {
 		mount_by_id "$DISK_ID_BIOS" "/boot/bios"
 	fi
 
+	ensure_portage_tmpdir
+
 	# Sync portage
 	einfo "Syncing portage tree"
 	try emerge-webrsync

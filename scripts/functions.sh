@@ -102,9 +102,13 @@ function ensure_portage_tmpdir() {
 	if getent passwd portage &>/dev/null; then
 		chown -R portage:portage "$tmpdir" \
 			|| die "Could not set ownership on $tmpdir"
+		chmod -R g+rwX "$tmpdir" \
+			|| die "Could not set permissions on $tmpdir"
 		chmod 2775 "$tmpdir" \
 			|| die "Could not set permissions on $tmpdir"
 	else
+		chmod -R a+rwX "$tmpdir" \
+			|| die "Could not set permissions on $tmpdir"
 		chmod 1777 "$tmpdir" \
 			|| die "Could not set permissions on $tmpdir"
 	fi
