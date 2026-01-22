@@ -95,14 +95,44 @@ function configure_portage() {
 	fi
 
 	if [[ $SELECT_MIRRORS == "true" ]]; then
-		einfo "Temporarily installing mirrorselect"
-		try emerge --verbose --oneshot app-portage/mirrorselect
+		local mirror_cache_dir="/var/cache/gentoo-install"
+		local mirror_cache_file="$mirror_cache_dir/gentoo_mirrors.conf"
 
-		einfo "Selecting fastest portage mirrors"
-		mirrorselect_params=("-s" "4" "-b" "10")
-		[[ $SELECT_MIRRORS_LARGE_FILE == "true" ]] \
-			&& mirrorselect_params+=("-D")
-		try mirrorselect "${mirrorselect_params[@]}"
+		if [[ -s "$mirror_cache_file" ]]; then
+			einfo "Using cached portage mirrors from $mirror_cache_file"
+			local cached_mirrors
+			cached_mirrors="$(cat "$mirror_cache_file")"
+			if grep -q "^GENTOO_MIRRORS=" /etc/portage/make.conf 2>/dev/null; then
+				sed -i "s|^GENTOO_MIRRORS=.*|GENTOO_MIRRORS=\"$cached_mirrors\"|" /etc/portage/make.conf \
+					|| die "Could not update GENTOO_MIRRORS in /etc/portage/make.conf"
+			else
+				echo "GENTOO_MIRRORS=\"$cached_mirrors\"" >> /etc/portage/make.conf \
+					|| die "Could not add GENTOO_MIRRORS to /etc/portage/make.conf"
+			fi
+		else
+			einfo "Temporarily installing mirrorselect"
+			try emerge --verbose --oneshot app-portage/mirrorselect
+
+			einfo "Selecting fastest portage mirrors"
+			mirrorselect_params=("-s" "4" "-b" "10")
+			[[ $SELECT_MIRRORS_LARGE_FILE == "true" ]] \
+				&& mirrorselect_params+=("-D")
+			try mirrorselect "${mirrorselect_params[@]}"
+
+			local mirrors_line
+			mirrors_line="$(grep "^GENTOO_MIRRORS=" /etc/portage/make.conf | tail -n 1)"
+			if [[ -n "$mirrors_line" ]]; then
+				local mirrors
+				mirrors="${mirrors_line#GENTOO_MIRRORS=}"
+				mirrors="${mirrors%\"}"
+				mirrors="${mirrors#\"}"
+				mkdir_or_die 0755 "$mirror_cache_dir"
+				echo "$mirrors" > "$mirror_cache_file" \
+					|| die "Could not write mirror cache to $mirror_cache_file"
+			else
+				ewarn "Mirrorselect did not update GENTOO_MIRRORS; skipping cache"
+			fi
+		fi
 
 		einfo "Adding ~$GENTOO_ARCH to ACCEPT_KEYWORDS"
 		echo "ACCEPT_KEYWORDS=\"~$GENTOO_ARCH\"" >> /etc/portage/make.conf \
