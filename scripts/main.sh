@@ -227,8 +227,7 @@ function generate_initramfs() {
 		--conf          "/dev/null" \
 		--confdir       "/dev/null" \
 		--kver          "$kver" \
-		--no-compress \
-		--no-hostonly \
+		--hostonly \
 		--ro-mnt \
 		--add           "bash ${modules[*]}" \
 		--force \
@@ -284,6 +283,50 @@ function install_grub() {
 
 	[[ -s /boot/grub/grub.cfg ]] \
 		|| die "grub.cfg was not created; aborting"
+
+	if [[ $IS_EFI == "true" ]]; then
+		local efi_vendor_loader=""
+		local efi_fallback_loader=""
+		case "${GENTOO_ARCH:-amd64}" in
+			amd64) efi_vendor_loader="grubx64.efi";  efi_fallback_loader="/boot/EFI/BOOT/BOOTX64.EFI" ;;
+			x86)   efi_vendor_loader="grubia32.efi"; efi_fallback_loader="/boot/EFI/BOOT/BOOTIA32.EFI" ;;
+			arm64) efi_vendor_loader="grubaa64.efi"; efi_fallback_loader="/boot/EFI/BOOT/BOOTAA64.EFI" ;;
+			arm)   efi_vendor_loader="grubarm.efi";  efi_fallback_loader="/boot/EFI/BOOT/BOOTARM.EFI" ;;
+			*)     efi_vendor_loader="grubx64.efi";  efi_fallback_loader="/boot/EFI/BOOT/BOOTX64.EFI" ;;
+		esac
+
+		local vendor_loader="/boot/EFI/gentoo/$efi_vendor_loader"
+		if [[ -e "$vendor_loader" ]] && [[ ! -e "$efi_fallback_loader" ]]; then
+			einfo "Creating EFI fallback loader at $efi_fallback_loader"
+			mkdir -p "$(dirname "$efi_fallback_loader")" \
+				|| die "Could not create EFI fallback directory"
+			cp "$vendor_loader" "$efi_fallback_loader" \
+				|| die "Could not copy EFI fallback loader"
+		fi
+
+		if command -v efibootmgr &>/dev/null; then
+			local boot_source boot_disk boot_partnum
+			boot_source="$(findmnt -n -o SOURCE /boot)" || boot_source=""
+			if [[ -n "$boot_source" ]]; then
+				boot_disk="/dev/$(lsblk -no PKNAME "$boot_source" 2>/dev/null)"
+				boot_partnum="$(lsblk -no PARTNUM "$boot_source" 2>/dev/null)"
+			fi
+
+			if [[ -n "$boot_disk" ]] && [[ -n "$boot_partnum" ]]; then
+				einfo "Creating EFI boot entry for Gentoo ($boot_disk, part $boot_partnum)"
+				try efibootmgr \
+					-c \
+					-d "$boot_disk" \
+					-p "$boot_partnum" \
+					-L "Gentoo" \
+					-l "\\EFI\\gentoo\\$efi_vendor_loader"
+			else
+				ewarn "Could not determine boot disk/partition for efibootmgr; relying on fallback loader."
+			fi
+		else
+			ewarn "efibootmgr not available; relying on fallback loader."
+		fi
+	fi
 }
 
 function generate_syslinux_cfg() {
@@ -392,6 +435,50 @@ function install_kernel() {
 
 	einfo "Compiling kernel with $KERNEL_MAKE_JOBS parallel jobs"
 	try cd /usr/src/linux && make -j"$KERNEL_MAKE_JOBS" && make modules_install && make install
+
+	local kver
+	kver="$(cd /usr/src/linux && make kernelrelease)" \
+		|| die "Could not determine kernel release"
+
+	# Ensure kernel/initramfs filenames are versioned and symlinked
+	if [[ $IS_EFI == "true" ]]; then
+		mountpoint -q -- "/boot" \
+			|| die "/boot is not mounted; cannot finalize kernel install"
+	else
+		mountpoint -q -- "/boot/bios" \
+			|| die "/boot/bios is not mounted; cannot finalize kernel install"
+	fi
+
+	local boot_dir="/boot"
+	local kernel_img="$boot_dir/vmlinuz-$kver"
+	local initramfs_img="$boot_dir/initramfs-$kver.img"
+
+	# Some installkernel implementations drop unversioned files; fix up names.
+	if [[ ! -e "$kernel_img" ]]; then
+		if [[ -e "$boot_dir/vmlinuz" ]]; then
+			einfo "Renaming kernel to $kernel_img"
+			cp "$boot_dir/vmlinuz" "$kernel_img" \
+				|| die "Could not copy kernel to $kernel_img"
+		else
+			ewarn "Kernel image not found in /boot; grub may not detect it"
+		fi
+	fi
+	if [[ -e "$kernel_img" ]]; then
+		ln -sf "$(basename "$kernel_img")" "$boot_dir/vmlinuz" 2>/dev/null \
+			|| cp "$kernel_img" "$boot_dir/vmlinuz"
+	fi
+
+	# Copy config for reference
+	if [[ -e /usr/src/linux/.config ]]; then
+		cp /usr/src/linux/.config "$boot_dir/config-$kver" || true
+	fi
+
+	# Generate initramfs and stable symlink
+	generate_initramfs "$initramfs_img"
+	if [[ -e "$initramfs_img" ]]; then
+		ln -sf "$(basename "$initramfs_img")" "$boot_dir/initramfs.img" 2>/dev/null \
+			|| { mv "$initramfs_img" "$boot_dir/initramfs.img" && initramfs_img="$boot_dir/initramfs.img"; }
+	fi
 
 	install_grub
 
