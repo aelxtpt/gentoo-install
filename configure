@@ -387,6 +387,8 @@ process_config
 ################################################
 # Menu helpers and constants
 
+SSH_SETUP_PROMPTED=false
+
 # $1: exit code
 function clear_and_exit() {
 	dialog --clear
@@ -419,6 +421,155 @@ function on_off_str() {
 	else
 		echo -n "$3"
 	fi
+}
+
+function ensure_sshd_installed() {
+	if type sshd &>/dev/null; then
+		return 0
+	fi
+
+	if type emerge &>/dev/null; then
+		emerge --noreplace net-misc/openssh
+	elif type apt-get &>/dev/null; then
+		apt-get update && apt-get install -y openssh-server
+	elif type pacman &>/dev/null; then
+		pacman -Sy --noconfirm openssh
+	elif type apk &>/dev/null; then
+		apk add openssh
+	elif type dnf &>/dev/null; then
+		dnf -y install openssh-server
+	elif type yum &>/dev/null; then
+		yum -y install openssh-server
+	elif type zypper &>/dev/null; then
+		zypper --non-interactive install openssh
+	else
+		return 1
+	fi
+
+	type sshd &>/dev/null
+}
+
+function configure_sshd_for_root_password() {
+	local sshd_config="/etc/ssh/sshd_config"
+	mkdir -p /etc/ssh
+	[[ -e "$sshd_config" ]] || touch "$sshd_config"
+
+	sed -i \
+		-e '/^[[:space:]]*#\{0,1\}[[:space:]]*PermitRootLogin[[:space:]]/d' \
+		-e '/^[[:space:]]*#\{0,1\}[[:space:]]*PasswordAuthentication[[:space:]]/d' \
+		"$sshd_config"
+
+	{
+		echo ""
+		echo "PermitRootLogin yes"
+		echo "PasswordAuthentication yes"
+	} >> "$sshd_config"
+}
+
+function set_root_password() {
+	if type chpasswd &>/dev/null; then
+		echo "root:12345" | chpasswd
+	elif type passwd &>/dev/null; then
+		printf "12345\n12345\n" | passwd root
+	else
+		return 1
+	fi
+}
+
+function start_sshd_service() {
+	type ssh-keygen &>/dev/null && ssh-keygen -A >/dev/null 2>&1
+
+	if type systemctl &>/dev/null; then
+		systemctl restart sshd >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1 \
+			|| systemctl start sshd >/dev/null 2>&1 || systemctl start ssh >/dev/null 2>&1
+		return
+	fi
+
+	if type rc-service &>/dev/null; then
+		rc-service sshd restart >/dev/null 2>&1 || rc-service sshd start >/dev/null 2>&1
+		return
+	fi
+
+	if [[ -x /etc/init.d/sshd ]]; then
+		/etc/init.d/sshd restart >/dev/null 2>&1 || /etc/init.d/sshd start >/dev/null 2>&1
+		return
+	fi
+
+	if [[ -x /etc/init.d/ssh ]]; then
+		/etc/init.d/ssh restart >/dev/null 2>&1 || /etc/init.d/ssh start >/dev/null 2>&1
+		return
+	fi
+
+	if type service &>/dev/null; then
+		service sshd start >/dev/null 2>&1 || service ssh start >/dev/null 2>&1
+		return
+	fi
+
+	type sshd &>/dev/null && sshd
+}
+
+function get_primary_ip() {
+	local ip_addr=""
+	if type hostname &>/dev/null; then
+		ip_addr="$(hostname -I 2>/dev/null | awk '{print $1}')"
+	fi
+	if [[ -z "$ip_addr" ]] && type ip &>/dev/null; then
+		ip_addr="$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+	fi
+	echo -n "$ip_addr"
+}
+
+function maybe_setup_ssh_access() {
+	if [[ $SSH_SETUP_PROMPTED == "true" ]]; then
+		return
+	fi
+	SSH_SETUP_PROMPTED=true
+
+	dialog \
+		--yes-label "Yes" --no-label "No" \
+		--yesno "Do you want to install and enable SSH to access this installation?\nThis will allow root login by password." \
+		"${CONFIRM_SIZE[@]}"
+
+	local diag_exit="$?"
+	if [[ $diag_exit != 0 ]]; then
+		return
+	fi
+
+	if [[ $EUID -ne 0 ]]; then
+		dialog --msgbox "You must run as root to install and configure SSH." "${CONFIRM_SIZE[@]}"
+		return
+	fi
+
+	if ! ensure_sshd_installed; then
+		dialog --msgbox "Could not install SSH automatically. Install openssh/sshd manually and try again." "${HELP_POPUP_SIZE[@]}"
+		return
+	fi
+
+	configure_sshd_for_root_password \
+		|| dialog --msgbox "Failed to configure /etc/ssh/sshd_config." "${HELP_POPUP_SIZE[@]}"
+
+	if ! set_root_password; then
+		dialog --msgbox "Could not set the root password." "${HELP_POPUP_SIZE[@]}"
+		return
+	fi
+
+	start_sshd_service
+
+	local ip_addr
+	ip_addr="$(get_primary_ip)"
+	if [[ -z "$ip_addr" ]]; then
+		ip_addr="(IP not found)"
+	fi
+
+	local info
+	info="SSH configured and started.\n\nHost: ${ip_addr}\nUser: root\nPassword: 12345\nPort: 22"
+	dialog --msgbox "$info" "${HELP_POPUP_SIZE[@]}"
+
+	echo "SSH configured and started."
+	echo "Host: ${ip_addr}"
+	echo "User: root"
+	echo "Password: 12345"
+	echo "Port: 22"
 }
 
 function on_off_label() {
@@ -620,6 +771,7 @@ function menu_exit() {
 		if [[ $diag_exit == 0 ]]; then
 			# <Save>
 			save "$CONFIG_FILE"
+			maybe_setup_ssh_access
 			clear_and_exit 0
 		elif [[ $diag_exit == 1 ]]; then
 			# <Discard>
@@ -645,6 +797,7 @@ function menu_save_as() {
 		# <Save>
 		SAVE_AS_FILENAME="$dialog_out"
 		save "$SAVE_AS_FILENAME"
+		maybe_setup_ssh_access
 		UNSAVED_CHANGES=false
 	else
 		# Back to menu (<ESC><ESC>, <Cancel>)
