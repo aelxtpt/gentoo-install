@@ -177,7 +177,7 @@ function get_device_by_uuid() {
 }
 
 function cache_lsblk_output() {
-	CACHED_LSBLK_OUTPUT="$(lsblk --all --path --pairs --output NAME,PTUUID,PARTUUID)" \
+	CACHED_LSBLK_OUTPUT="$(lsblk --all --path --pairs --output NAME,PTUUID,PARTUUID,TYPE)" \
 		|| die "Error while executing lsblk to cache output"
 }
 
@@ -187,11 +187,22 @@ function get_device_by_ptuuid() {
 	if [[ -v CACHED_LSBLK_OUTPUT && -n "$CACHED_LSBLK_OUTPUT" ]]; then
 		dev="$CACHED_LSBLK_OUTPUT"
 	else
-		dev="$(lsblk --all --path --pairs --output NAME,PTUUID,PARTUUID)" \
+		dev="$(lsblk --all --path --pairs --output NAME,PTUUID,PARTUUID,TYPE)" \
 			|| die "Error while executing lsblk to find PTUUID=$ptuuid"
 	fi
-	dev="$(grep "ptuuid=\"$ptuuid\" partuuid=\"\"" <<< "${dev,,}")" \
-		|| die "Could not find PTUUID=... in lsblk output"
+
+	local matches=()
+	local line
+	while IFS="" read -r line; do
+		matches+=("$line")
+	done < <(printf '%s\n' "${dev,,}" | grep -F "ptuuid=\"$ptuuid\"" | grep -F 'type="disk"')
+
+	[[ ${#matches[@]} -gt 0 ]] \
+		|| die "Could not find PTUUID=$ptuuid in lsblk output (device busy or stale kernel table?)"
+	[[ ${#matches[@]} -eq 1 ]] \
+		|| die "Found multiple devices with PTUUID=$ptuuid (stale kernel table?)"
+
+	dev="${matches[0]}"
 	dev="${dev%'" ptuuid='*}"
 	dev="${dev#'name="'}"
 	echo -n "$dev"
