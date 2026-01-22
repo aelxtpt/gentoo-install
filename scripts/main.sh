@@ -232,6 +232,11 @@ function install_kernel() {
 
 	# Install vanilla kernel
 	einfo "Installing vanilla kernel and related tools"
+	mkdir_or_die 0755 "/etc/portage/package.license"
+	if ! grep -qx "sys-kernel/linux-firmware linux-fw-redistributable" /etc/portage/package.license/linux-firmware 2>/dev/null; then
+		echo "sys-kernel/linux-firmware linux-fw-redistributable" >> /etc/portage/package.license/linux-firmware \
+			|| die "Could not add linux-firmware license"
+	fi
 	try emerge --verbose sys-kernel/gentoo-sources sys-kernel/linux-firmware
 
 	einfo "Setting kernel number"
@@ -478,5 +483,4 @@ function main_chroot() {
 
 	gentoo_chroot "$@"
 }
-
 
