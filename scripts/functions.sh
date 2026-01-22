@@ -20,24 +20,32 @@ function detect_architecture() {
 
 # Get GRUB platform for current architecture
 function get_grub_platform() {
-	case "${GENTOO_ARCH:-amd64}" in
-		amd64) echo "efi-64" ;;
-		arm64) echo "efi-arm64" ;;
-		x86)   echo "efi-32" ;;
-		arm)   echo "efi-arm" ;;
-		*)     die "Unknown architecture for GRUB platform: $GENTOO_ARCH" ;;
-	esac
+	if [[ "${IS_EFI:-false}" == "true" ]]; then
+		case "${GENTOO_ARCH:-amd64}" in
+			amd64) echo "efi-64" ;;
+			arm64) echo "efi-arm64" ;;
+			x86)   echo "efi-32" ;;
+			arm)   echo "efi-arm" ;;
+			*)     die "Unknown architecture for GRUB platform: $GENTOO_ARCH" ;;
+		esac
+	else
+		echo "pc"
+	fi
 }
 
 # Get GRUB install target for current architecture
 function get_grub_target() {
-	case "${GENTOO_ARCH:-amd64}" in
-		amd64) echo "x86_64-efi" ;;
-		arm64) echo "arm64-efi" ;;
-		x86)   echo "i386-efi" ;;
-		arm)   echo "arm-efi" ;;
-		*)     die "Unknown architecture for GRUB target: $GENTOO_ARCH" ;;
-	esac
+	if [[ "${IS_EFI:-false}" == "true" ]]; then
+		case "${GENTOO_ARCH:-amd64}" in
+			amd64) echo "x86_64-efi" ;;
+			arm64) echo "arm64-efi" ;;
+			x86)   echo "i386-efi" ;;
+			arm)   echo "arm-efi" ;;
+			*)     die "Unknown architecture for GRUB target: $GENTOO_ARCH" ;;
+		esac
+	else
+		echo "i386-pc"
+	fi
 }
 
 # Get QEMU system binary name for current architecture

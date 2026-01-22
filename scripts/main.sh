@@ -259,16 +259,25 @@ function install_grub() {
 
 	try emerge --verbose sys-boot/grub
 
+	local boot_dir="/boot"
 	if [[ $IS_EFI == "true" ]]; then
-		mountpoint -q -- "/boot" \
+		mountpoint -q -- "$boot_dir" \
 			|| die "/boot is not mounted; cannot install grub"
+		einfo "Installing grub (EFI target: $grub_target)"
+		try grub-install \
+			--target="$grub_target" \
+			--efi-directory="$boot_dir" \
+			--bootloader-id=gentoo \
+			--removable
 	else
-		mountpoint -q -- "/boot/bios" \
+		boot_dir="/boot/bios"
+		mountpoint -q -- "$boot_dir" \
 			|| die "/boot/bios is not mounted; cannot install grub"
+		einfo "Installing grub (BIOS target: $grub_target)"
+		try grub-install \
+			--target="$grub_target" \
+			--boot-directory="$boot_dir"
 	fi
-
-	einfo "Installing grub (target: $grub_target)"
-	try grub-install --target="$grub_target" --efi-directory=/boot
 
 	einfo "Configuring grub"
 	try grub-mkconfig -o /boot/grub/grub.cfg
