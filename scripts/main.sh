@@ -467,6 +467,9 @@ function install_kernel() {
 	einfo "Installing lzo lzop"
 	try emerge --verbose lzo lzop
 
+	einfo "Installing dracut"
+	try emerge --verbose sys-kernel/dracut
+
 	einfo "Compiling kernel with $KERNEL_MAKE_JOBS parallel jobs"
 	try cd /usr/src/linux && make -j"$KERNEL_MAKE_JOBS" && make modules_install && make install
 
