@@ -77,6 +77,23 @@ function configure_portage() {
 	mkdir_or_die 0755 "/etc/portage/package.keywords"
 	touch_or_die 0644 "/etc/portage/package.keywords/zz-autounmask"
 
+	local make_jobs
+	if type nproc &>/dev/null; then
+		make_jobs="$(nproc)"
+	else
+		make_jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+	fi
+	[[ -n "$make_jobs" ]] || make_jobs=1
+	local makeopts="-j${make_jobs}"
+	export MAKEOPTS="$makeopts"
+	if grep -q "^MAKEOPTS=" /etc/portage/make.conf 2>/dev/null; then
+		sed -i "s/^MAKEOPTS=.*/MAKEOPTS=\"$makeopts\"/" /etc/portage/make.conf \
+			|| die "Could not update MAKEOPTS in /etc/portage/make.conf"
+	else
+		echo "MAKEOPTS=\"$makeopts\"" >> /etc/portage/make.conf \
+			|| die "Could not add MAKEOPTS to /etc/portage/make.conf"
+	fi
+
 	if [[ $SELECT_MIRRORS == "true" ]]; then
 		einfo "Temporarily installing mirrorselect"
 		try emerge --verbose --oneshot app-portage/mirrorselect
@@ -89,10 +106,6 @@ function configure_portage() {
 
 		einfo "Adding ~$GENTOO_ARCH to ACCEPT_KEYWORDS"
 		echo "ACCEPT_KEYWORDS=\"~$GENTOO_ARCH\"" >> /etc/portage/make.conf \
-			|| die "Could not modify /etc/portage/make.conf"
-
-		einfo "Adding makeopts to make.conf"
-		echo "MAKEOPTS=\"-j6\"" >> /etc/portage/make.conf \
 			|| die "Could not modify /etc/portage/make.conf"
 	fi
 }
@@ -483,4 +496,3 @@ function main_chroot() {
 
 	gentoo_chroot "$@"
 }
-
