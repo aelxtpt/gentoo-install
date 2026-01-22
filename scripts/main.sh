@@ -114,11 +114,28 @@ function configure_portage() {
 	if [[ $SELECT_MIRRORS == "true" ]]; then
 		local mirror_cache_dir="/var/cache/gentoo-install"
 		local mirror_cache_file="$mirror_cache_dir/gentoo_mirrors.conf"
+		local cached_mirrors=""
+		local mirrors_line=""
 
 		if [[ -s "$mirror_cache_file" ]]; then
 			einfo "Using cached portage mirrors from $mirror_cache_file"
-			local cached_mirrors
 			cached_mirrors="$(cat "$mirror_cache_file")"
+		else
+			mirrors_line="$(grep "^GENTOO_MIRRORS=" /etc/portage/make.conf | tail -n 1)"
+			if [[ -n "$mirrors_line" ]]; then
+				cached_mirrors="${mirrors_line#GENTOO_MIRRORS=}"
+				cached_mirrors="${cached_mirrors%\"}"
+				cached_mirrors="${cached_mirrors#\"}"
+				if [[ -n "$cached_mirrors" ]]; then
+					einfo "Using existing GENTOO_MIRRORS from make.conf"
+					mkdir_or_die 0755 "$mirror_cache_dir"
+					echo "$cached_mirrors" > "$mirror_cache_file" \
+						|| die "Could not write mirror cache to $mirror_cache_file"
+				fi
+			fi
+		fi
+
+		if [[ -n "$cached_mirrors" ]]; then
 			if grep -q "^GENTOO_MIRRORS=" /etc/portage/make.conf 2>/dev/null; then
 				sed -i "s|^GENTOO_MIRRORS=.*|GENTOO_MIRRORS=\"$cached_mirrors\"|" /etc/portage/make.conf \
 					|| die "Could not update GENTOO_MIRRORS in /etc/portage/make.conf"
@@ -136,7 +153,6 @@ function configure_portage() {
 				&& mirrorselect_params+=("-D")
 			try mirrorselect "${mirrorselect_params[@]}"
 
-			local mirrors_line
 			mirrors_line="$(grep "^GENTOO_MIRRORS=" /etc/portage/make.conf | tail -n 1)"
 			if [[ -n "$mirrors_line" ]]; then
 				local mirrors
