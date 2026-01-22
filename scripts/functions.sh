@@ -81,6 +81,35 @@ function sync_time() {
 		|| die "Could not save time to hardware clock"
 }
 
+function ensure_pty_limit() {
+	local desired=4096
+	if [[ -w /proc/sys/kernel/pty/max ]]; then
+		local current
+		current="$(cat /proc/sys/kernel/pty/max 2>/dev/null || echo "")"
+		if [[ -n "$current" ]] && [[ "$current" -lt "$desired" ]]; then
+			einfo "Increasing PTY limit from $current to $desired"
+			echo "$desired" > /proc/sys/kernel/pty/max \
+				|| ewarn "Could not increase PTY limit"
+		fi
+	fi
+}
+
+function ensure_portage_tmpdir() {
+	local tmpdir="/var/tmp/portage"
+	mkdir -p "$tmpdir" \
+		|| die "Could not create $tmpdir"
+
+	if getent passwd portage &>/dev/null; then
+		chown -R portage:portage "$tmpdir" \
+			|| die "Could not set ownership on $tmpdir"
+		chmod 2775 "$tmpdir" \
+			|| die "Could not set permissions on $tmpdir"
+	else
+		chmod 1777 "$tmpdir" \
+			|| die "Could not set permissions on $tmpdir"
+	fi
+}
+
 function check_config() {
 	[[ $KEYMAP =~ ^[0-9A-Za-z-]*$ ]] \
 		|| die "KEYMAP contains invalid characters"
@@ -158,6 +187,7 @@ function prepare_installation_environment() {
 
 	# Sync time now to prevent issues later
 	sync_time
+	ensure_pty_limit
 }
 
 function check_encryption_key() {
@@ -1060,6 +1090,104 @@ function file_exists() {
     return 1 # false
 }
 
+function install_state_dir() {
+	if [[ ${EXECUTED_IN_CHROOT-false} == "true" ]]; then
+		echo -n "/.gentoo-install"
+	else
+		echo -n "$ROOT_MOUNTPOINT/.gentoo-install"
+	fi
+}
+
+function install_state_file() {
+	echo -n "$(install_state_dir)/state"
+}
+
+function install_state_rank() {
+	case "$1" in
+		'disk_configured')  echo -n 1 ;;
+		'stage3_extracted') echo -n 2 ;;
+		'chroot_complete')  echo -n 3 ;;
+		*) echo -n 0 ;;
+	esac
+}
+
+function mount_root_for_state() {
+	if mountpoint -q -- "$ROOT_MOUNTPOINT"; then
+		echo -n "already"
+		return 0
+	fi
+
+	local dev
+	dev="$(resolve_device_by_id_safe "$DISK_ID_ROOT")" \
+		|| return 1
+	mkdir -p "$ROOT_MOUNTPOINT" \
+		|| return 1
+	mount "$dev" "$ROOT_MOUNTPOINT" \
+		|| return 1
+	echo -n "mounted"
+}
+
+function read_install_state() {
+	local state_file
+	state_file="$(install_state_file)"
+
+	if [[ ${EXECUTED_IN_CHROOT-false} == "true" ]]; then
+		[[ -f "$state_file" ]] && cat "$state_file"
+		return 0
+	fi
+
+	local mount_state
+	mount_state="$(mount_root_for_state)" \
+		|| return 0
+
+	[[ -f "$state_file" ]] && cat "$state_file"
+
+	if [[ "$mount_state" == "mounted" ]]; then
+		umount -l "$ROOT_MOUNTPOINT" || true
+	fi
+}
+
+function write_install_state() {
+	local stage="$1"
+	local state_dir
+	state_dir="$(install_state_dir)"
+
+	if [[ ${EXECUTED_IN_CHROOT-false} != "true" ]]; then
+		local mount_state
+		mount_state="$(mount_root_for_state)" \
+			|| { ewarn "Could not mount root to write install state"; return 0; }
+	fi
+
+	mkdir -p "$state_dir" \
+		|| die "Could not create install state directory '$state_dir'"
+	echo "$stage" > "$state_dir/state" \
+		|| die "Could not write install state to '$state_dir/state'"
+
+	if [[ ${EXECUTED_IN_CHROOT-false} != "true" ]] && [[ "$mount_state" == "mounted" ]]; then
+		umount -l "$ROOT_MOUNTPOINT" || true
+	fi
+}
+
+function clear_install_state() {
+	local state_dir
+	state_dir="$(install_state_dir)"
+
+	if [[ ${EXECUTED_IN_CHROOT-false} == "true" ]]; then
+		rm -rf "$state_dir"
+		return 0
+	fi
+
+	local mount_state
+	mount_state="$(mount_root_for_state)" \
+		|| return 0
+
+	rm -rf "$state_dir"
+
+	if [[ "$mount_state" == "mounted" ]]; then
+		umount -l "$ROOT_MOUNTPOINT" || true
+	fi
+}
+
 function download_file() {
 	local url="$1"
 }
@@ -1124,7 +1252,7 @@ function extract_stage3() {
 	cd "$ROOT_MOUNTPOINT" \
 		|| die "Could not move to '$ROOT_MOUNTPOINT'"
 	# Ensure the directory is empty
-	find . -mindepth 1 -maxdepth 1 -not -name 'lost+found' \
+	find . -mindepth 1 -maxdepth 1 -not -name 'lost+found' -not -name '.gentoo-install' \
 		| grep -q . \
 		&& die "root directory '$ROOT_MOUNTPOINT' is not empty"
 

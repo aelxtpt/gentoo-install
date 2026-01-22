@@ -9,9 +9,25 @@ function install_stage3() {
 	[[ $# == 0 ]] || die "Too many arguments"
 
 	prepare_installation_environment
-	apply_disk_configuration
-	download_stage3
-	extract_stage3
+	local stage="${INSTALL_RESUME_STAGE-}"
+	local stage_rank
+	stage_rank="$(install_state_rank "$stage")"
+
+	if [[ "$stage_rank" -lt 1 ]]; then
+		apply_disk_configuration
+		write_install_state "disk_configured"
+	else
+		einfo "Skipping disk configuration (resume)"
+	fi
+
+	if [[ "$stage_rank" -lt 2 ]]; then
+		download_stage3
+		extract_stage3
+		write_install_state "stage3_extracted"
+	else
+		einfo "Skipping stage3 extraction (resume)"
+		mount_root
+	fi
 }
 
 function configure_base_system() {
@@ -76,6 +92,7 @@ function configure_portage() {
 	touch_or_die 0644 "/etc/portage/package.use/zz-autounmask"
 	mkdir_or_die 0755 "/etc/portage/package.keywords"
 	touch_or_die 0644 "/etc/portage/package.keywords/zz-autounmask"
+	ensure_portage_tmpdir
 
 	local make_jobs
 	if type nproc &>/dev/null; then
@@ -499,14 +516,36 @@ EOF
 
 	# Install kernel and initramfs
 	install_kernel
+	write_install_state "chroot_complete"
 
+}
 
+function maybe_resume_install() {
+	local state
+	state="$(read_install_state)"
+	[[ -n "$state" ]] || return 0
+
+	ewarn "Detected previous install state: $state"
+	if [[ "$state" == "chroot_complete" ]]; then
+		if ask "Installation appears complete. Start over?"; then
+			clear_install_state
+		else
+			die "Installation already completed."
+		fi
+	else
+		if ask "Continue from the previous state?"; then
+			INSTALL_RESUME_STAGE="$state"
+		else
+			clear_install_state
+		fi
+	fi
 }
 
 
 function main_install() {
 	[[ $# == 0 ]] || die "Too many arguments"
 
+	maybe_resume_install
 	gentoo_umount
 	install_stage3
 

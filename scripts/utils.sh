@@ -269,6 +269,53 @@ function resolve_device_by_id() {
 	esac
 }
 
+function resolve_device_by_id_safe() {
+	local id="$1"
+	[[ -v DISK_ID_TO_RESOLVABLE[$id] ]] \
+		|| return 1
+
+	local type="${DISK_ID_TO_RESOLVABLE[$id]%%:*}"
+	local arg="${DISK_ID_TO_RESOLVABLE[$id]#*:}"
+
+	case "$type" in
+		'partuuid')
+			[[ -e "/dev/disk/by-partuuid/$arg" ]] \
+				|| return 1
+			echo -n "/dev/disk/by-partuuid/$arg"
+			;;
+		'ptuuid')
+			local line
+			line="$(lsblk --all --path --pairs --output NAME,PTUUID,TYPE 2>/dev/null \
+				| tr '[:upper:]' '[:lower:]' \
+				| grep -F "ptuuid=\"${arg,,}\"" \
+				| grep -F 'type="disk"' \
+				| head -n 1)" \
+				|| return 1
+			[[ -n "$line" ]] || return 1
+			line="${line,,}"
+			line="${line%\" ptuuid=\"*}"
+			line="${line#'name=\"'}"
+			echo -n "$line"
+			;;
+		'uuid')
+			[[ -e "/dev/disk/by-uuid/$arg" ]] \
+				|| return 1
+			echo -n "/dev/disk/by-uuid/$arg"
+			;;
+		'luks')
+			[[ -e "/dev/mapper/$arg" ]] \
+				|| return 1
+			echo -n "/dev/mapper/$arg"
+			;;
+		'device')
+			[[ -e "$arg" ]] \
+				|| return 1
+			echo -n "$arg"
+			;;
+		*) return 1 ;;
+	esac
+}
+
 function load_or_generate_uuid() {
 	local uuid
 	local uuid_file="$UUID_STORAGE_DIR/$1"
