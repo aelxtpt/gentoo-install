@@ -87,6 +87,14 @@ function configure_base_system() {
 }
 
 function configure_portage() {
+	normalize_mirrors() {
+		local mirrors="$1"
+		mirrors="${mirrors//\"/}"
+		mirrors="$(tr '\n' ' ' <<< "$mirrors")"
+		mirrors="$(sed -e 's/[[:space:]]\+/ /g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<< "$mirrors")"
+		echo -n "$mirrors"
+	}
+
 	# Prepare /etc/portage for autounmask
 	mkdir_or_die 0755 "/etc/portage/package.use"
 	touch_or_die 0644 "/etc/portage/package.use/zz-autounmask"
@@ -121,16 +129,17 @@ function configure_portage() {
 
 		if [[ -s "$mirror_cache_file" ]]; then
 			einfo "Using cached portage mirrors from $mirror_cache_file"
-			cached_mirrors="$(cat "$mirror_cache_file")"
+			cached_mirrors="$(normalize_mirrors "$(cat "$mirror_cache_file")")"
 		elif [[ -s "$repo_cache_file" ]]; then
 			einfo "Using cached portage mirrors from $repo_cache_file"
-			cached_mirrors="$(cat "$repo_cache_file")"
+			cached_mirrors="$(normalize_mirrors "$(cat "$repo_cache_file")")"
 		else
 			mirrors_line="$(grep "^GENTOO_MIRRORS=" /etc/portage/make.conf | tail -n 1)"
 			if [[ -n "$mirrors_line" ]]; then
 				cached_mirrors="${mirrors_line#GENTOO_MIRRORS=}"
 				cached_mirrors="${cached_mirrors%\"}"
 				cached_mirrors="${cached_mirrors#\"}"
+				cached_mirrors="$(normalize_mirrors "$cached_mirrors")"
 				if [[ -n "$cached_mirrors" ]]; then
 					einfo "Using existing GENTOO_MIRRORS from make.conf"
 					mkdir_or_die 0755 "$mirror_cache_dir"
@@ -167,6 +176,7 @@ function configure_portage() {
 				mirrors="${mirrors_line#GENTOO_MIRRORS=}"
 				mirrors="${mirrors%\"}"
 				mirrors="${mirrors#\"}"
+				mirrors="$(normalize_mirrors "$mirrors")"
 				mkdir_or_die 0755 "$mirror_cache_dir"
 				echo "$mirrors" > "$mirror_cache_file" \
 					|| die "Could not write mirror cache to $mirror_cache_file"
