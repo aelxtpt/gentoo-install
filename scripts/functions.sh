@@ -72,10 +72,7 @@ function sync_time() {
 
 	einfo "Using NTP servers: ${ntp_servers[*]}"
 	local ntpd_cmd=(ntpd -g -q)
-	local server
-	for server in "${ntp_servers[@]}"; do
-		ntpd_cmd+=("-p" "$server")
-	done
+	ntpd_cmd+=("${ntp_servers[@]}")
 	try "${ntpd_cmd[@]}"
 
 	einfo "Current date: $(LANG=C date)"
