@@ -114,12 +114,17 @@ function configure_portage() {
 	if [[ $SELECT_MIRRORS == "true" ]]; then
 		local mirror_cache_dir="/var/cache/gentoo-install"
 		local mirror_cache_file="$mirror_cache_dir/gentoo_mirrors.conf"
+		local repo_cache_dir="$GENTOO_INSTALL_REPO_DIR/.cache"
+		local repo_cache_file="$repo_cache_dir/gentoo_mirrors.conf"
 		local cached_mirrors=""
 		local mirrors_line=""
 
 		if [[ -s "$mirror_cache_file" ]]; then
 			einfo "Using cached portage mirrors from $mirror_cache_file"
 			cached_mirrors="$(cat "$mirror_cache_file")"
+		elif [[ -s "$repo_cache_file" ]]; then
+			einfo "Using cached portage mirrors from $repo_cache_file"
+			cached_mirrors="$(cat "$repo_cache_file")"
 		else
 			mirrors_line="$(grep "^GENTOO_MIRRORS=" /etc/portage/make.conf | tail -n 1)"
 			if [[ -n "$mirrors_line" ]]; then
@@ -131,6 +136,9 @@ function configure_portage() {
 					mkdir_or_die 0755 "$mirror_cache_dir"
 					echo "$cached_mirrors" > "$mirror_cache_file" \
 						|| die "Could not write mirror cache to $mirror_cache_file"
+					mkdir_or_die 0755 "$repo_cache_dir"
+					echo "$cached_mirrors" > "$repo_cache_file" \
+						|| die "Could not write mirror cache to $repo_cache_file"
 				fi
 			fi
 		fi
@@ -162,6 +170,9 @@ function configure_portage() {
 				mkdir_or_die 0755 "$mirror_cache_dir"
 				echo "$mirrors" > "$mirror_cache_file" \
 					|| die "Could not write mirror cache to $mirror_cache_file"
+				mkdir_or_die 0755 "$repo_cache_dir"
+				echo "$mirrors" > "$repo_cache_file" \
+					|| die "Could not write mirror cache to $repo_cache_file"
 			else
 				ewarn "Mirrorselect did not update GENTOO_MIRRORS; skipping cache"
 			fi
