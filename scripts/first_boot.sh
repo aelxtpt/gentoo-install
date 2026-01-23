@@ -185,13 +185,13 @@ media-libs/libcanberra alsa pulseaudio udev
 media-plugins/alsa-plugins pulseaudio
 EOF
 
-	# Break common circular dep between tiff<->libwebp seen with KDE/NVIDIA stacks.
+# Break common circular dep between tiff<->libwebp seen with KDE/NVIDIA stacks.
 	cat > /etc/portage/package.use/graphics <<'EOF'
 media-libs/tiff -webp
 media-libs/libwebp -tiff
 EOF
 
-	tune_kernel_for_nvidia
+tune_kernel_for_nvidia
 
 	einfo "Blacklisting nouveau and enabling nvidia-drm modeset"
 	mkdir -p /etc/modprobe.d
@@ -250,7 +250,7 @@ Section "OutputClass"
     Option "AllowEmptyInitialConfiguration" "yes"
     Option "PrimaryGPU" "yes"
 EndSection
-	EOF
+EOF
 
 	einfo "Setting desktop packages"
 	try log_run "Installing base desktop packages" emerge --noreplace $PACKAGES
