@@ -46,14 +46,13 @@ has_kernel_option() {
 
 kernel_option_value() {
 	local cfg="$1" opt="$2"
+	local line=""
 	if [[ "$cfg" == *.gz ]]; then
-		# Allow missing values without tripping -e/-o pipefail
-		zgrep -E "^${opt}=" "$cfg" 2>/dev/null || true
+		line="$(zgrep -E "^${opt}=" "$cfg" 2>/dev/null | head -n1 || true)"
 	else
-		grep -E "^${opt}=" "$cfg" 2>/dev/null || true
+		line="$(grep -E "^${opt}=" "$cfg" 2>/dev/null | head -n1 || true)"
 	fi
-	# Head/cut remain stable; previous stage is forced to succeed.
-	head -n1 | cut -d= -f2
+	echo "${line#*=}"
 }
 
 require_kernel_option() {
