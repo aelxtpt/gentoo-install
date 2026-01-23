@@ -137,16 +137,18 @@ function tune_kernel_for_nvidia() {
 	require_kernel_option "$cfg_after" "CONFIG_DRM" "y" "m"
 		require_kernel_option "$cfg_after" "CONFIG_DRM_KMS_HELPER" "y" "m"
 		require_kernel_option "$cfg_after" "CONFIG_DRM_TTM" "y" "m"
-		forbid_kernel_option "$cfg_after" "CONFIG_DRM_NOUVEAU"
-		forbid_kernel_option "$cfg_after" "CONFIG_NOUVEAU"
-		forbid_kernel_option "$cfg_after" "CONFIG_FB_NVIDIA"
-	}
+	forbid_kernel_option "$cfg_after" "CONFIG_DRM_NOUVEAU"
+	forbid_kernel_option "$cfg_after" "CONFIG_NOUVEAU"
+	forbid_kernel_option "$cfg_after" "CONFIG_FB_NVIDIA"
+}
 
 function first_boot() {
 	# Prepare log location
 	FIRST_BOOT_LOG="${FIRST_BOOT_LOG:-/tmp/first_boot.log}"
 	touch "$FIRST_BOOT_LOG" 2>/dev/null || true
 	chmod 600 "$FIRST_BOOT_LOG" 2>/dev/null || true
+	einfo "Logging detailed output to $FIRST_BOOT_LOG (tip: tail -f $FIRST_BOOT_LOG)"
+	umask 0022
 
 	# Show all profiles (avoid color parsing issues) and let the user pick.
 	einfo "Available profiles:"
@@ -192,6 +194,12 @@ media-libs/libwebp -tiff
 EOF
 
 tune_kernel_for_nvidia
+
+	# Ensure kernel build artifacts are world-readable for module builds (nvidia, etc).
+	if [[ -d /usr/src/linux ]]; then
+		einfo "Relaxing permissions on kernel tree for module builds"
+		chmod -R go+r /usr/src/linux || true
+	fi
 
 	einfo "Blacklisting nouveau and enabling nvidia-drm modeset"
 	mkdir -p /etc/modprobe.d
