@@ -89,6 +89,8 @@ function configure_base_system() {
 function configure_portage() {
 	normalize_mirrors() {
 		local mirrors="$1"
+		# Remove trailing backslashes and quotes, compress whitespace.
+		mirrors="$(sed -e 's/\\\\$//' <<< "$mirrors")"
 		mirrors="${mirrors//\"/}"
 		mirrors="$(tr '\n' ' ' <<< "$mirrors")"
 		mirrors="$(sed -e 's/[[:space:]]\+/ /g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<< "$mirrors")"
@@ -217,6 +219,14 @@ function generate_initramfs() {
 	# Generate initramfs
 	einfo "Generating initramfs"
 
+	# Ensure dracut config dirs exist (dracut expects them even if empty).
+	mkdir_or_die 0755 "/etc/dracut.conf.d"
+	local empty_confdir
+	empty_confdir="$(mktemp -d /tmp/dracut-conf.XXXXXX)" \
+		|| die "Could not create temporary dracut confdir"
+	# Ensure we always remove the temp confdir.
+	trap 'rm -rf "$empty_confdir"' RETURN
+
 	local modules=()
 	[[ $USED_RAID == "true" ]] \
 		&& modules+=("mdraid")
@@ -235,7 +245,7 @@ function generate_initramfs() {
 	# Generate initramfs
 	try dracut \
 		--conf          "/dev/null" \
-		--confdir       "/dev/null" \
+		--confdir       "$empty_confdir" \
 		--kver          "$kver" \
 		--hostonly \
 		--ro-mnt \
@@ -526,7 +536,7 @@ function install_kernel() {
 	generate_initramfs "$initramfs_img"
 	if [[ -e "$initramfs_img" ]]; then
 		ln -sf "$(basename "$initramfs_img")" "$boot_dir/initramfs.img" 2>/dev/null \
-			|| { mv "$initramfs_img" "$boot_dir/initramfs.img" && initramfs_img="$boot_dir/initramfs.img"; }
+			|| cp "$initramfs_img" "$boot_dir/initramfs.img"
 	fi
 
 	install_grub
