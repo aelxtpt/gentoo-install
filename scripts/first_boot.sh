@@ -76,6 +76,68 @@ forbid_kernel_option() {
 	fi
 }
 
+kernel_config_path() {
+	if [[ -r /proc/config.gz ]]; then
+		echo /proc/config.gz
+		return 0
+	fi
+	if [[ -r /usr/src/linux/.config ]]; then
+		echo /usr/src/linux/.config
+		return 0
+	fi
+	return 1
+}
+
+has_kernel_option() {
+	local cfg="$1" opt="$2"
+	if [[ "$cfg" == *.gz ]]; then
+		zgrep -qE "^${opt}=|^# ${opt} " "$cfg" 2>/dev/null
+	else
+		grep -qE "^${opt}=|^# ${opt} " "$cfg" 2>/dev/null
+	fi
+}
+
+kernel_option_value() {
+	local cfg="$1" opt="$2"
+	if [[ "$cfg" == *.gz ]]; then
+		zgrep -E "^${opt}=" "$cfg" 2>/dev/null | head -n1 | cut -d= -f2
+	else
+		grep -E "^${opt}=" "$cfg" 2>/dev/null | head -n1 | cut -d= -f2
+	fi
+}
+
+require_kernel_option() {
+	local cfg="$1" opt="$2"; shift 2
+	local allowed=("$@")
+	if ! has_kernel_option "$cfg" "$opt"; then
+		ewarn "Kernel option $opt not found; set it to one of: ${allowed[*]}"
+		return
+	fi
+	local val
+	val="$(kernel_option_value "$cfg" "$opt")"
+	local ok=false
+	local a
+	for a in "${allowed[@]}"; do
+		if [[ "$val" == "$a" ]]; then
+			ok=true; break
+		fi
+	done
+	if [[ "$ok" != true ]]; then
+		ewarn "Kernel option $opt=$val, expected one of: ${allowed[*]}"
+	}
+}
+
+forbid_kernel_option() {
+	local cfg="$1" opt="$2"
+	if has_kernel_option "$cfg" "$opt"; then
+		local val
+		val="$(kernel_option_value "$cfg" "$opt")"
+		if [[ -n "$val" ]]; then
+			ewarn "Kernel option $opt is enabled ($val); disable it for NVIDIA proprietary drivers."
+		fi
+	fi
+}
+
 ACCEPT_LICENSE="*"
 PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-sound/pulseaudio"
 VIDEO_CARDS="nvidia"
@@ -85,6 +147,44 @@ INPUT_DEVICES="libinput"
 DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm kde-misc/latte-dock")
 
 QEMU_PACKAGES=("app-emulation/qemu app-emulation/libvirt net-misc/bridge-utils app-emulation/virt-manager app-emulation/virt-viewer app-emulation/spice-vdagent")
+
+function tune_kernel_for_nvidia() {
+	local cfg
+	if ! cfg="$(kernel_config_path)"; then
+		ewarn "Could not find kernel .config to tune for NVIDIA; skipping."
+		return
+	fi
+	if [[ ! -x /usr/src/linux/scripts/config ]]; then
+		ewarn "Missing /usr/src/linux/scripts/config; skipping kernel tweaks for NVIDIA."
+		return
+	fi
+
+	einfo "Tuning kernel config for NVIDIA proprietary driver"
+	(
+		cd /usr/src/linux || exit 0
+		# Ensure module support and DRM helpers
+		./scripts/config --enable MODULES
+		./scripts/config --module DRM
+		./scripts/config --module DRM_KMS_HELPER
+		./scripts/config --module DRM_TTM
+		./scripts/config --enable FB
+		./scripts/config --enable FB_SIMPLE
+		# Disable conflicting drivers
+		./scripts/config --disable DRM_NOUVEAU
+		./scripts/config --disable NOUVEAU
+		./scripts/config --disable FB_NVIDIA
+		# Settle deps
+		make olddefconfig
+	)
+
+	# Report current status
+	require_kernel_option "$cfg" "CONFIG_MODULES" "y"
+	require_kernel_option "$cfg" "CONFIG_DRM" "y" "m"
+	require_kernel_option "$cfg" "CONFIG_DRM_KMS_HELPER" "y" "m"
+	forbid_kernel_option "$cfg" "CONFIG_DRM_NOUVEAU"
+	forbid_kernel_option "$cfg" "CONFIG_NOUVEAU"
+	forbid_kernel_option "$cfg" "CONFIG_FB_NVIDIA"
+}
 
 function first_boot() {
 	local arch="${GENTOO_ARCH:-amd64}"
@@ -111,24 +211,38 @@ function first_boot() {
 	einfo "Resolving permissions on kernel src"
 	chmod a+r /usr/src/linux
 
-	# NVIDIA proprietary driver sanity checks.
-	einfo "Checking kernel config for NVIDIA proprietary driver"
-	local kcfg
-	if kcfg="$(kernel_config_path)"; then
-		require_kernel_option "$kcfg" "CONFIG_MODULES" "y"
-		require_kernel_option "$kcfg" "CONFIG_DRM" "y" "m"
-		require_kernel_option "$kcfg" "CONFIG_DRM_KMS_HELPER" "y" "m"
-		require_kernel_option "$kcfg" "CONFIG_FB" "y"
-		forbid_kernel_option "$kcfg" "CONFIG_DRM_NOUVEAU"
-		forbid_kernel_option "$kcfg" "CONFIG_FB_NVIDIA"
-	else
-		ewarn "Could not find kernel config; please ensure nouveau is disabled and DRM core helpers are enabled."
-	fi
+	tune_kernel_for_nvidia
 
 	einfo "Blacklisting nouveau and enabling nvidia-drm modeset"
 	mkdir -p /etc/modprobe.d
 	echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf
 	echo "options nvidia-drm modeset=1" > /etc/modprobe.d/nvidia.conf
+
+	if ask "Rebuild kernel now with NVIDIA settings applied?"; then
+		if [[ -x /usr/src/linux/compile_kernel.sh ]]; then
+			try /usr/src/linux/compile_kernel.sh
+		else
+			einfo "compile_kernel.sh not found; falling back to manual build"
+			(
+				cd /usr/src/linux || exit 1
+				if [[ -n "${MAKEOPTS:-}" && "$MAKEOPTS" =~ -j([0-9]+) ]]; then
+					jobs="${BASH_REMATCH[1]}"
+				else
+					jobs="$(nproc)"
+				fi
+				make -j"$jobs" || exit 1
+				make modules_install || exit 1
+				make INSTALLKERNEL=installkernel-gentoo install || exit 1
+				kver="$(make kernelrelease)"
+				mkdir -p /etc/dracut.conf.d
+				tmp_confdir="$(mktemp -d /tmp/dracut-conf.XXXXXX)"
+				trap 'rm -rf "$tmp_confdir"' EXIT
+				dracut --conf /dev/null --confdir "$tmp_confdir" --kver "$kver" --hostonly --ro-mnt --force "/boot/initramfs-${kver}.img" || exit 1
+				cp "/boot/initramfs-${kver}.img" /boot/initramfs.img || exit 1
+				grub-mkconfig -o /boot/grub/grub.cfg || exit 1
+			)
+		fi
+	fi
 
 	einfo "Setting desktop packages"
 	try emerge --noreplace $PACKAGES
