@@ -1,5 +1,18 @@
-# shellcheck source=./scripts/protection.sh
-source "$GENTOO_INSTALL_REPO_DIR/scripts/protection.sh" || exit 1
+# Standalone helpers (avoid relying on installer env)
+set -euo pipefail
+
+einfo() { echo ">>> $*"; }
+ewarn() { echo "!!! $*" >&2; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+file_exists() { [[ -e "$1" ]]; }
+file_has_string() { grep -qF "$1" "$2" 2>/dev/null; }
+ask() {
+	local prompt="$1"
+	read -rp "$prompt (Y/n) " ans
+	[[ -z "$ans" || "$ans" =~ ^[Yy] ]] && return 0
+	return 1
+}
+try() { "$@" || die "Command failed: $*"; }
 
 ACCEPT_LICENSE="*"
 PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-sound/pulseaudio"
@@ -12,12 +25,17 @@ DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app
 QEMU_PACKAGES=("app-emulation/qemu app-emulation/libvirt net-misc/bridge-utils app-emulation/virt-manager app-emulation/virt-viewer app-emulation/spice-vdagent")
 
 function first_boot() {
-	local profile="default/linux/${GENTOO_ARCH:-amd64}/23.0/desktop/plasma/systemd"
+	local arch="${GENTOO_ARCH:-amd64}"
+	local profile="default/linux/${arch}/23.0/desktop/plasma/systemd"
 	einfo "Selecting profile $profile"
-	try eselect profile set "$profile"
+	if eselect profile list | grep -q "$profile"; then
+		try eselect profile set "$profile"
+	else
+		ewarn "Profile $profile not found; skipping profile selection."
+	fi
 
-    if ask "I Should add VIDEO_CARDS, USE, INPUT_DEVICES, ACCEPT_LICENSE on make.conf ?"; then
-    	echo "ACCEPT_LICENSE=\"$ACCEPT_LICENSE\"" >> /etc/portage/make.conf \
+	if ask "Add VIDEO_CARDS, USE, INPUT_DEVICES, ACCEPT_LICENSE to make.conf?"; then
+		echo "ACCEPT_LICENSE=\"$ACCEPT_LICENSE\"" >> /etc/portage/make.conf \
 			|| die "Could not add ACCEPT_LICENSE on /etc/portage/make.conf"
 		echo "USE=\"$USE\"" >> /etc/portage/make.conf \
 			|| die "Could not add USE on /etc/portage/make.conf"
@@ -31,19 +49,19 @@ function first_boot() {
 	einfo "Resolving permissions on kernel src"
 	chmod a+r /usr/src/linux
 
-    einfo "Setting desktop packages"
-    try emerge --noreplace $PACKAGES
+	einfo "Setting desktop packages"
+	try emerge --noreplace $PACKAGES
 
-    if ask "Do you want update world set ?"; then
+	if ask "Do you want update world set ?"; then
 		einfo "Update world set"
-    	try emerge --update --deep --newuse @world
+		try emerge --update --deep --newuse @world
 	fi
 
-    einfo "Installing KDE Plasma"
-    try emerge --noreplace kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
+	einfo "Installing KDE Plasma"
+	try emerge --noreplace kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
 
-    einfo "Installing desktop apps"
-    try emerge --noreplace --autounmask-continue=y -- "${DESKTOP_APPS[@]}"
+	einfo "Installing desktop apps"
+	try emerge --noreplace --autounmask-continue=y -- "${DESKTOP_APPS[@]}"
 
     if ! file_exists ~/.xinitrc; then
     	einfo "Create .xinitrc"
@@ -58,21 +76,9 @@ function first_boot() {
 		fi
 	fi
 
-	if ! file_exists /usr/src/linux/compile_kernel; then
-		einfo "Generating script to compile kernel src"
-		touch /usr/src/linux/compile_kernel
-
-		if ! file_has_string "#!/bin/sh" /usr/src/linux/compile_kernel; then
-			echo "#!/bin/sh" >> /usr/src/linux/compile_kernel || die "Could not add the content to compile_kernel"
-			echo "make -j6 && make modules_install && make install" >> /usr/src/linux/compile_kernel || die "Could not add the content to compile_kernel"
-			echo "emerge @module-rebuild" >> /usr/src/linux/compile_kernel || die "Could not add the content to compile_kernel"
-			echo "grub-mkconfig -o /boot/grub/grub.cfg" >> /usr/src/linux/compile_kernel || die "Could not add the content to compile_kernel"
-			chmod +x /usr/src/linux/compile_kernel
-		fi
-	fi
-
 	if ask "Do you want install Steam ?"; then
 		einfo "Installing Steam"
+		mkdir -p /etc/portage/package.accept_keywords
 		try emerge --autounmask-continue=y --noreplace app-eselect/eselect-repository dev-vcs/git
 		try eselect repository enable steam-overlay
 		try emerge --sync
@@ -87,6 +93,7 @@ function first_boot() {
 	fi
 
 	einfo "Preparing to install snapd"
+	mkdir -p /etc/portage/package.use
 	if ! file_has_string "sys-apps/systemd" /etc/portage/package.use/systemd; then
 		echo "sys-apps/systemd policykit apparmor" >> /etc/portage/package.use/systemd || die "Could not add sys-apps/systemd pol... to package.use"
 		echo "sys-libs/libseccomp static-libs" >> /etc/portage/package.use/systemd || die "Could not add sys-libs/libseccomp stat... to package.use"
@@ -106,14 +113,14 @@ function first_boot() {
 	einfo "Installing snapd"
 	try emerge --autounmask-continue=y --noreplace app-containers/snapd
 
-	if ! file_has_string "sys-fs/squashfs" /etc/portage/package.use/squashtools; then
+	if ! file_has_string "sys-fs/squashfs-tools" /etc/portage/package.use/squashtools; then
 		einfo "Add flags to squashtools"
 		echo "sys-fs/squashfs-tools lz4 lzma lzo xattr zstd" >> /etc/portage/package.use/squashtools || die "Could not modify package.use/squashtools"
 
 		try emerge --changed-use --deep sys-fs/squashfs-tools
 
 		einfo "Creating snap link on /snap"
-		try ln -s /var/lib/snapd/snap /snap
+		try ln -sf /var/lib/snapd/snap /snap
 	fi
 
 	einfo "Enabling snapd on systemd"
@@ -145,11 +152,12 @@ function post_install() {
 	try snap install obs-studio
 
 	einfo "Try install qemu"
+	mkdir -p /etc/portage/package.use
 	if ! file_has_string "app-emulation/qemu" /etc/portage/package.use/emulation; then
 		echo "app-emulation/qemu spice usb pulseaudio usbredir vhost-net vhost-user-fs" >> /etc/portage/package.use/emulation
 	fi
 
-	try emerge --noreplace --autouunmask-write=y --autounmask=y -- "${QEMU_PACKAGES[@]}"
+	try emerge --noreplace --autounmask-write=y --autounmask=y -- "${QEMU_PACKAGES[@]}"
 	try echo "-3\nyes" | etc-update
 	try emerge --noreplace -- "${QEMU_PACKAGES[@]}"
 }

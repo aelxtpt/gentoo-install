@@ -546,6 +546,13 @@ function install_kernel() {
 			|| cp "$initramfs_img" "$boot_dir/initramfs.img"
 	fi
 
+	# Drop a helper script for rebuilding kernels later.
+	if [[ -f "$GENTOO_INSTALL_REPO_DIR/contrib/compile_kernel.sh" ]]; then
+		cp "$GENTOO_INSTALL_REPO_DIR/contrib/compile_kernel.sh" /usr/src/linux/compile_kernel.sh \
+			|| die "Could not install /usr/src/linux/compile_kernel.sh"
+		chmod +x /usr/src/linux/compile_kernel.sh || true
+	fi
+
 	install_grub
 
 	# Generate a valid fstab file
