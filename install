@@ -70,6 +70,8 @@ while [[ $# -gt 0 ]]; do
 			echo "                                  must already be mounted under DIR. All required special"
 			echo "                                  filesystems will be mounted inside, and unmounted when"
 			echo "                                  the chroot exits."
+			echo "      --first_boot              Run the post-install \"first_boot\" tasks inside an installed system."
+			echo "      --post_install            Run the \"post_install\" tasks inside an installed system."
 			exit 0
 			;;
 		"-c"|"--config")
@@ -88,6 +90,14 @@ while [[ $# -gt 0 ]]; do
 		"-i"|"--install")
 			[[ -z $ACTION ]] || die "Multiple actions given"
 			ACTION="install"
+			;;
+		"--first_boot"|"--first-boot")
+			[[ -z $ACTION ]] || die "Multiple actions given"
+			ACTION="first_boot"
+			;;
+		"--post_install"|"--post-install")
+			[[ -z $ACTION ]] || die "Multiple actions given"
+			ACTION="post_install"
 			;;
 		"__install_gentoo_in_chroot")
 			ACTION="__install_gentoo_in_chroot"
