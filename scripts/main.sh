@@ -197,9 +197,32 @@ function configure_portage() {
 }
 
 function install_sshd() {
-	einfo "Installing sshd"
-	install -m0600 -o root -g root "$GENTOO_INSTALL_REPO_DIR/contrib/sshd_config" /etc/ssh/sshd_config \
-		|| die "Could not install /etc/ssh/sshd_config"
+	einfo "Installing openssh (sshd)"
+	try emerge --verbose net-misc/openssh
+
+	einfo "Generating SSH host keys"
+	try ssh-keygen -A
+
+	einfo "Configuring sshd for root password login"
+	local sshd_config="/etc/ssh/sshd_config"
+	touch "$sshd_config"
+	if grep -q "^PermitRootLogin" "$sshd_config"; then
+		sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' "$sshd_config"
+	else
+		echo "PermitRootLogin yes" >> "$sshd_config"
+	fi
+	if grep -q "^PasswordAuthentication" "$sshd_config"; then
+		sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' "$sshd_config"
+	else
+		echo "PasswordAuthentication yes" >> "$sshd_config"
+	fi
+	if grep -q "^UsePAM" "$sshd_config"; then
+		sed -i 's/^UsePAM.*/UsePAM yes/' "$sshd_config"
+	else
+		echo "UsePAM yes" >> "$sshd_config"
+	fi
+
+	einfo "Enabling sshd service"
 	enable_service sshd
 
 	mkdir_or_die 0700 "/root/"
