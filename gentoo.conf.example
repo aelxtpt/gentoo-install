@@ -210,8 +210,8 @@ LOCALE="C.utf8"
 SYSTEMD=true
 
 # Choose whether to download the portage tree via git or rsync.
-# Git syncing is significantly faster, and generally preferred for new installations.
-PORTAGE_SYNC_TYPE="git"
+# rsync tends to be the most resilient on unstable networks.
+PORTAGE_SYNC_TYPE="rsync"
 # If you have chosen git, you may select to download the full history of the repository.
 # This can easily take up 1-2GB of disk space.
 PORTAGE_GIT_FULL_HISTORY=false

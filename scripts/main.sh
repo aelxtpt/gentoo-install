@@ -271,6 +271,11 @@ function install_grub() {
 	grub_platform="$(get_grub_platform)"
 	grub_target="$(get_grub_target)"
 
+	# Avoid heavy themes on small EFI partitions; disable grub themes.
+	mkdir_or_die 0755 "/etc/portage/package.use"
+	echo "sys-boot/grub -themes" > /etc/portage/package.use/grub \
+		|| die "Could not disable grub themes via package.use"
+
 	# Add grub_platforms
 	einfo "Adding GRUB_PLATFORMS to make.conf (platform: $grub_platform)"
 	echo "GRUB_PLATFORMS=\"$grub_platform\"" >> /etc/portage/make.conf \
@@ -282,6 +287,7 @@ function install_grub() {
 	if [[ $IS_EFI == "true" ]]; then
 		mountpoint -q -- "$boot_dir" \
 			|| die "/boot is not mounted; cannot install grub"
+		ensure_boot_space "$boot_dir" 50
 		einfo "Installing grub (EFI target: $grub_target)"
 		try grub-install \
 			--target="$grub_target" \
@@ -292,6 +298,7 @@ function install_grub() {
 		boot_dir="/boot/bios"
 		mountpoint -q -- "$boot_dir" \
 			|| die "/boot/bios is not mounted; cannot install grub"
+		ensure_boot_space "$boot_dir" 50
 		einfo "Installing grub (BIOS target: $grub_target)"
 		try grub-install \
 			--target="$grub_target" \
@@ -654,6 +661,7 @@ function main_install_gentoo_in_chroot() {
 
 	if [[ "$PORTAGE_SYNC_TYPE" == "git" ]]; then
 		mkdir_or_die 0755 "/etc/portage/repos.conf"
+		mkdir_or_die 0755 "/etc/portage/repos.conf"
 		cat > /etc/portage/repos.conf/gentoo.conf <<EOF
 [DEFAULT]
 main-repo = gentoo
@@ -671,6 +679,22 @@ EOF
 			|| die "Could not change permissions of '/etc/portage/repos.conf/gentoo.conf'"
 		rm -rf /var/db/repos/gentoo \
 			|| die "Could not delete obsolete rsync gentoo repository"
+		try emerge --sync
+	else
+		# Force a known-good rsync configuration
+		mkdir_or_die 0755 "/etc/portage/repos.conf"
+		cat > /etc/portage/repos.conf/gentoo.conf <<'EOF'
+[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /var/db/repos/gentoo
+sync-type = rsync
+sync-uri = rsync://rsync.gentoo.org/gentoo-portage
+auto-sync = yes
+EOF
+		chmod 644 /etc/portage/repos.conf/gentoo.conf \
+			|| die "Could not change permissions of '/etc/portage/repos.conf/gentoo.conf'"
 		try emerge --sync
 	fi
 
