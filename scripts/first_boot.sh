@@ -15,12 +15,13 @@ ask() {
 try() { "$@" || die "Command failed: $*"; }
 
 kernel_config_path() {
-	if [[ -r /proc/config.gz ]]; then
-		echo /proc/config.gz
-		return 0
-	fi
+	# Prefer the build tree config if present, then fall back to the running kernel.
 	if [[ -r /usr/src/linux/.config ]]; then
 		echo /usr/src/linux/.config
+		return 0
+	fi
+	if [[ -r /proc/config.gz ]]; then
+		echo /proc/config.gz
 		return 0
 	fi
 	return 1
@@ -77,9 +78,10 @@ forbid_kernel_option() {
 }
 
 ACCEPT_LICENSE="*"
+# Wayland-first (keep X for fallback)
 PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-sound/pulseaudio"
 VIDEO_CARDS="nvidia"
-USE="X suid xvmc nvidia pulseaudio"
+USE="X suid xvmc nvidia pulseaudio egl wayland kms gbm"
 INPUT_DEVICES="libinput"
 
 DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm kde-misc/latte-dock")
@@ -116,13 +118,15 @@ function tune_kernel_for_nvidia() {
 	)
 
 	# Report current status
-	require_kernel_option "$cfg" "CONFIG_MODULES" "y"
-	require_kernel_option "$cfg" "CONFIG_DRM" "y" "m"
-	require_kernel_option "$cfg" "CONFIG_DRM_KMS_HELPER" "y" "m"
-	forbid_kernel_option "$cfg" "CONFIG_DRM_NOUVEAU"
-	forbid_kernel_option "$cfg" "CONFIG_NOUVEAU"
-	forbid_kernel_option "$cfg" "CONFIG_FB_NVIDIA"
-}
+	local cfg_after="/usr/src/linux/.config"
+	require_kernel_option "$cfg_after" "CONFIG_MODULES" "y"
+	require_kernel_option "$cfg_after" "CONFIG_DRM" "y" "m"
+		require_kernel_option "$cfg_after" "CONFIG_DRM_KMS_HELPER" "y" "m"
+		require_kernel_option "$cfg_after" "CONFIG_DRM_TTM" "y" "m"
+		forbid_kernel_option "$cfg_after" "CONFIG_DRM_NOUVEAU"
+		forbid_kernel_option "$cfg_after" "CONFIG_NOUVEAU"
+		forbid_kernel_option "$cfg_after" "CONFIG_FB_NVIDIA"
+	}
 
 function first_boot() {
 	local arch="${GENTOO_ARCH:-amd64}"
@@ -155,6 +159,20 @@ function first_boot() {
 	mkdir -p /etc/modprobe.d
 	echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf
 	echo "options nvidia-drm modeset=1" > /etc/modprobe.d/nvidia.conf
+	mkdir -p /etc/modules-load.d
+	cat > /etc/modules-load.d/nvidia.conf <<'EOF'
+nvidia
+nvidia_modeset
+nvidia_uvm
+nvidia_drm
+EOF
+	mkdir -p /etc/modules-load.d
+	cat > /etc/modules-load.d/nvidia.conf <<'EOF'
+nvidia
+nvidia_modeset
+nvidia_uvm
+nvidia_drm
+EOF
 
 	if ask "Rebuild kernel now with NVIDIA settings applied?"; then
 		if [[ -x /usr/src/linux/compile_kernel.sh ]]; then
@@ -181,6 +199,29 @@ function first_boot() {
 			)
 		fi
 	fi
+
+	einfo "Installing NVIDIA drivers and selecting GL/CL implementations"
+	try emerge --verbose --noreplace x11-drivers/nvidia-drivers
+	if command -v eselect >/dev/null 2>&1; then
+		if eselect opengl list | grep -q nvidia; then
+			eselect opengl set nvidia || true
+		fi
+		if eselect opencl list 2>/dev/null | grep -q nvidia; then
+			eselect opencl set nvidia || true
+		fi
+	fi
+
+	einfo "Writing Xorg NVIDIA config (fallback for X sessions)"
+	mkdir -p /etc/X11/xorg.conf.d
+	cat > /etc/X11/xorg.conf.d/10-nvidia.conf <<'EOF'
+Section "OutputClass"
+    Identifier "nvidia"
+    MatchDriver "nvidia-drm"
+    Driver "nvidia"
+    Option "AllowEmptyInitialConfiguration" "yes"
+    Option "PrimaryGPU" "yes"
+EndSection
+EOF
 
 	einfo "Setting desktop packages"
 	try emerge --noreplace $PACKAGES
