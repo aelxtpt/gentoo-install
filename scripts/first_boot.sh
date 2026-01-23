@@ -102,19 +102,20 @@ function tune_kernel_for_nvidia() {
 	einfo "Tuning kernel config for NVIDIA proprietary driver"
 	(
 		cd /usr/src/linux || exit 0
+		set +e
 		# Ensure module support and DRM helpers
-		./scripts/config --enable MODULES
-		./scripts/config --module DRM
-		./scripts/config --module DRM_KMS_HELPER
-		./scripts/config --module DRM_TTM
-		./scripts/config --enable FB
-		./scripts/config --enable FB_SIMPLE
+		./scripts/config --enable MODULES || true
+		./scripts/config --module DRM || true
+		./scripts/config --module DRM_KMS_HELPER || true
+		./scripts/config --module DRM_TTM || true
+		./scripts/config --enable FB || true
+		./scripts/config --enable FB_SIMPLE || true
 		# Disable conflicting drivers
-		./scripts/config --disable DRM_NOUVEAU
-		./scripts/config --disable NOUVEAU
-		./scripts/config --disable FB_NVIDIA
+		./scripts/config --disable DRM_NOUVEAU || true
+		./scripts/config --disable NOUVEAU || true
+		./scripts/config --disable FB_NVIDIA || true
 		# Settle deps
-		make olddefconfig
+		make olddefconfig >/dev/null || true
 	)
 
 	# Report current status
@@ -129,13 +130,42 @@ function tune_kernel_for_nvidia() {
 	}
 
 function first_boot() {
-	local arch="${GENTOO_ARCH:-amd64}"
-	local profile="default/linux/${arch}/23.0/desktop/plasma/systemd"
-	einfo "Selecting profile $profile"
-	if eselect profile list | grep -q "$profile"; then
-		try eselect profile set "$profile"
+	# Let user choose a Plasma profile if available.
+	einfo "Detecting available Plasma profiles"
+	local numbers=() profiles=()
+	while IFS= read -r line; do
+		if [[ "$line" =~ ^\[([0-9]+)\][[:space:]]+([^[:space:]]*plasma[^[:space:]]*) ]]; then
+			numbers+=("${BASH_REMATCH[1]}")
+			profiles+=("${BASH_REMATCH[2]}")
+		fi
+	done < <(eselect profile list)
+
+	if [[ ${#profiles[@]} -gt 0 ]]; then
+		einfo "Available Plasma profiles:"
+		local i
+		for i in "${!profiles[@]}"; do
+			echo "  ${numbers[$i]}: ${profiles[$i]}"
+		done
+		read -rp "Choose profile number (blank to skip): " choice
+		if [[ -n "${choice:-}" ]]; then
+			local selected=""
+			for i in "${!numbers[@]}"; do
+				if [[ "$choice" == "${numbers[$i]}" ]]; then
+					selected="${profiles[$i]}"
+					break
+				fi
+			done
+			if [[ -n "$selected" ]]; then
+				einfo "Selecting profile $selected"
+				try eselect profile set "$selected"
+			else
+				ewarn "Invalid choice; skipping profile selection."
+			fi
+		else
+			ewarn "No profile selected; skipping profile selection."
+		fi
 	else
-		ewarn "Profile $profile not found; skipping profile selection."
+		ewarn "No Plasma profiles found; skipping profile selection."
 	fi
 
 	if ask "Add VIDEO_CARDS, USE, INPUT_DEVICES, ACCEPT_LICENSE to make.conf?"; then
@@ -159,13 +189,6 @@ function first_boot() {
 	mkdir -p /etc/modprobe.d
 	echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf
 	echo "options nvidia-drm modeset=1" > /etc/modprobe.d/nvidia.conf
-	mkdir -p /etc/modules-load.d
-	cat > /etc/modules-load.d/nvidia.conf <<'EOF'
-nvidia
-nvidia_modeset
-nvidia_uvm
-nvidia_drm
-EOF
 	mkdir -p /etc/modules-load.d
 	cat > /etc/modules-load.d/nvidia.conf <<'EOF'
 nvidia
