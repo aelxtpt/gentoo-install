@@ -36,4 +36,4 @@ echo "Done. Root password login over SSH is now enabled."
 
 # Display IP addresses for convenience
 echo "IP addresses:"
-hostname -I || ip -4 addr show | awk '/inet / {print $2}'
+ip -4 addr show | awk '/inet / {print $2}'
