@@ -79,9 +79,9 @@ forbid_kernel_option() {
 
 ACCEPT_LICENSE="*"
 # Wayland-first (keep X for fallback)
-PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-sound/pulseaudio"
+PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-video/pipewire media-video/wireplumber"
 VIDEO_CARDS="nvidia"
-USE="X suid xvmc nvidia pulseaudio egl wayland kms gbm"
+USE="X suid xvmc nvidia pipewire pulseaudio egl wayland kms gbm opengl alsa"
 INPUT_DEVICES="libinput"
 
 DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm kde-misc/latte-dock")
@@ -183,6 +183,15 @@ function first_boot() {
 	einfo "Resolving permissions on kernel src"
 	chmod a+r /usr/src/linux
 
+	einfo "Configuring PipeWire defaults"
+	mkdir -p /etc/portage/package.use
+	cat > /etc/portage/package.use/pipewire <<'EOF'
+media-video/pipewire X pulseaudio sound-server pipewire-alsa
+media-video/wireplumber systemd
+media-libs/libcanberra alsa pulseaudio udev
+media-plugins/alsa-plugins pulseaudio
+EOF
+
 	tune_kernel_for_nvidia
 
 	einfo "Blacklisting nouveau and enabling nvidia-drm modeset"
@@ -197,30 +206,28 @@ nvidia_uvm
 nvidia_drm
 EOF
 
-	if ask "Rebuild kernel now with NVIDIA settings applied?"; then
-		if [[ -x /usr/src/linux/compile_kernel.sh ]]; then
-			try /usr/src/linux/compile_kernel.sh
-		else
-			einfo "compile_kernel.sh not found; falling back to manual build"
-			(
-				cd /usr/src/linux || exit 1
-				if [[ -n "${MAKEOPTS:-}" && "$MAKEOPTS" =~ -j([0-9]+) ]]; then
-					jobs="${BASH_REMATCH[1]}"
-				else
-					jobs="$(nproc)"
-				fi
-				make -j"$jobs" || exit 1
-				make modules_install || exit 1
-				make INSTALLKERNEL=installkernel-gentoo install || exit 1
-				kver="$(make kernelrelease)"
-				mkdir -p /etc/dracut.conf.d
-				tmp_confdir="$(mktemp -d /tmp/dracut-conf.XXXXXX)"
-				trap 'rm -rf "$tmp_confdir"' EXIT
-				dracut --conf /dev/null --confdir "$tmp_confdir" --kver "$kver" --hostonly --ro-mnt --force "/boot/initramfs-${kver}.img" || exit 1
-				cp "/boot/initramfs-${kver}.img" /boot/initramfs.img || exit 1
-				grub-mkconfig -o /boot/grub/grub.cfg || exit 1
-			)
-		fi
+	einfo "Rebuilding kernel with NVIDIA settings"
+	if [[ -x /usr/src/linux/compile_kernel.sh ]]; then
+		try /usr/src/linux/compile_kernel.sh
+	else
+		(
+			cd /usr/src/linux || exit 1
+			if [[ -n "${MAKEOPTS:-}" && "$MAKEOPTS" =~ -j([0-9]+) ]]; then
+				jobs="${BASH_REMATCH[1]}"
+			else
+				jobs="$(nproc)"
+			fi
+			make -j"$jobs" || exit 1
+			make modules_install || exit 1
+			make INSTALLKERNEL=installkernel-gentoo install || exit 1
+			kver="$(make kernelrelease)"
+			mkdir -p /etc/dracut.conf.d
+			tmp_confdir="$(mktemp -d /tmp/dracut-conf.XXXXXX)"
+			trap 'rm -rf "$tmp_confdir"' EXIT
+			dracut --conf /dev/null --confdir "$tmp_confdir" --kver "$kver" --hostonly --ro-mnt --force "/boot/initramfs-${kver}.img" || exit 1
+			cp "/boot/initramfs-${kver}.img" /boot/initramfs.img || exit 1
+			grub-mkconfig -o /boot/grub/grub.cfg || exit 1
+		)
 	fi
 
 	einfo "Installing NVIDIA drivers and selecting GL/CL implementations"
@@ -271,6 +278,11 @@ EOF
 			echo "exec dbus-launch --exit-with-session startplasma-x11" >> ~/.xinitrc \
 				|| die "Could not add content to .xinitrc"
 		fi
+	fi
+
+	if command -v systemctl >/dev/null 2>&1; then
+		einfo "Enabling PipeWire for all users (systemd global user units)"
+		systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
 	fi
 
 	if ask "Do you want install Steam ?"; then
