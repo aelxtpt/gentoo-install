@@ -13,6 +13,14 @@ ask() {
 	return 1
 }
 try() { "$@" || die "Command failed: $*"; }
+log_run() {
+	local desc="$1"; shift
+	local log="${FIRST_BOOT_LOG:-/tmp/first_boot.log}"
+	touch "$log"
+	chmod 600 "$log" || true
+	einfo "$desc (log: $log; tail -f \"$log\" for live output)"
+	("$@" 2>&1 | tee -a "$log"); return ${PIPESTATUS[0]}
+}
 
 kernel_config_path() {
 	# Prefer the build tree config if present, then fall back to the running kernel.
@@ -135,6 +143,11 @@ function tune_kernel_for_nvidia() {
 	}
 
 function first_boot() {
+	# Prepare log location
+	FIRST_BOOT_LOG="${FIRST_BOOT_LOG:-/tmp/first_boot.log}"
+	touch "$FIRST_BOOT_LOG" 2>/dev/null || true
+	chmod 600 "$FIRST_BOOT_LOG" 2>/dev/null || true
+
 	# Show all profiles (avoid color parsing issues) and let the user pick.
 	einfo "Available profiles:"
 	eselect profile list || ewarn "Could not list profiles"
@@ -172,6 +185,12 @@ media-libs/libcanberra alsa pulseaudio udev
 media-plugins/alsa-plugins pulseaudio
 EOF
 
+	# Break common circular dep between tiff<->libwebp seen with KDE/NVIDIA stacks.
+	cat > /etc/portage/package.use/graphics <<'EOF'
+media-libs/tiff -webp
+media-libs/libwebp -tiff
+EOF
+
 	tune_kernel_for_nvidia
 
 	einfo "Blacklisting nouveau and enabling nvidia-drm modeset"
@@ -188,9 +207,9 @@ EOF
 
 	einfo "Rebuilding kernel with NVIDIA settings"
 	if [[ -x /usr/src/linux/compile_kernel.sh ]]; then
-		try /usr/src/linux/compile_kernel.sh
+		try log_run "Building kernel via /usr/src/linux/compile_kernel.sh" /usr/src/linux/compile_kernel.sh
 	else
-		(
+		try log_run "Building kernel (manual fallback)" bash -c '
 			cd /usr/src/linux || exit 1
 			if [[ -n "${MAKEOPTS:-}" && "$MAKEOPTS" =~ -j([0-9]+) ]]; then
 				jobs="${BASH_REMATCH[1]}"
@@ -203,15 +222,15 @@ EOF
 			kver="$(make kernelrelease)"
 			mkdir -p /etc/dracut.conf.d
 			tmp_confdir="$(mktemp -d /tmp/dracut-conf.XXXXXX)"
-			trap 'rm -rf "$tmp_confdir"' EXIT
+			trap '"'\'\''rm -rf "$tmp_confdir"'\''"' EXIT
 			dracut --conf /dev/null --confdir "$tmp_confdir" --kver "$kver" --hostonly --ro-mnt --force "/boot/initramfs-${kver}.img" || exit 1
 			cp "/boot/initramfs-${kver}.img" /boot/initramfs.img || exit 1
 			grub-mkconfig -o /boot/grub/grub.cfg || exit 1
-		)
+		'
 	fi
 
 	einfo "Installing NVIDIA drivers and selecting GL/CL implementations"
-	try emerge --verbose --noreplace x11-drivers/nvidia-drivers
+	try log_run "Installing NVIDIA drivers" emerge --verbose --noreplace x11-drivers/nvidia-drivers
 	if command -v eselect >/dev/null 2>&1; then
 		if eselect opengl list | grep -q nvidia; then
 			eselect opengl set nvidia || true
@@ -231,21 +250,21 @@ Section "OutputClass"
     Option "AllowEmptyInitialConfiguration" "yes"
     Option "PrimaryGPU" "yes"
 EndSection
-EOF
+	EOF
 
 	einfo "Setting desktop packages"
-	try emerge --noreplace $PACKAGES
+	try log_run "Installing base desktop packages" emerge --noreplace $PACKAGES
 
 	if ask "Do you want update world set ?"; then
 		einfo "Update world set"
-		try emerge --update --deep --newuse @world
+		try log_run "Updating @world" emerge --update --deep --newuse @world
 	fi
 
 	einfo "Installing KDE Plasma"
-	try emerge --noreplace kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
+	try log_run "Installing KDE Plasma" emerge --noreplace kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
 
 	einfo "Installing desktop apps"
-	try emerge --noreplace --autounmask-continue=y -- "${DESKTOP_APPS[@]}"
+	try log_run "Installing desktop apps" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_APPS[@]}"
 
     if ! file_exists ~/.xinitrc; then
     	einfo "Create .xinitrc"
@@ -268,9 +287,9 @@ EOF
 	if ask "Do you want install Steam ?"; then
 		einfo "Installing Steam"
 		mkdir -p /etc/portage/package.accept_keywords
-		try emerge --autounmask-continue=y --noreplace app-eselect/eselect-repository dev-vcs/git
+		try log_run "Installing steam overlay prerequisites" emerge --autounmask-continue=y --noreplace app-eselect/eselect-repository dev-vcs/git
 		try eselect repository enable steam-overlay
-		try emerge --sync
+		try log_run "Syncing repositories" emerge --sync
 
 		if ! file_has_string "*/*::steam-overlay" /etc/portage/package.accept_keywords/steam-overlay; then
 			einfo "Add steam overlay package to accept keywords"
@@ -278,7 +297,7 @@ EOF
 		fi
 
 		# Not working, need unmaskwrite and etc-update and it has circular conclict with ncurses....
-		try emerge --autounmask-write=y --autounmask=y --noreplace games-util/steam-launcher && echo "-3\nyes\nyes" | etc-update && emerge USE="-ncurses" --noreplace games-util/steam-launcher && emerge USE="-gpm" --noreplace ncurses
+		try log_run "Installing Steam launcher" bash -c 'emerge --autounmask-write=y --autounmask=y --noreplace games-util/steam-launcher && echo "-3\nyes\nyes" | etc-update && emerge USE="-ncurses" --noreplace games-util/steam-launcher && emerge USE="-gpm" --noreplace ncurses'
 	fi
 
 	einfo "Preparing to install snapd"
@@ -289,7 +308,7 @@ EOF
 	fi
 
 	einfo "Installing system and apparmor"
-	try emerge --autounmask-continue=y --noreplace sys-apps/systemd sys-apps/apparmor
+	try log_run "Installing systemd and apparmor" emerge --autounmask-continue=y --noreplace sys-apps/systemd sys-apps/apparmor
 
 	einfo "Modifying grub bootloader"
 	if ! file_has_string 'GRUB_CMDLINE_LINUX_DEFAULT="apparmor=1 security=apparmor"' /etc/default/grub; then
@@ -300,13 +319,13 @@ EOF
 	try grub-mkconfig -o /boot/grub/grub.cfg
 
 	einfo "Installing snapd"
-	try emerge --autounmask-continue=y --noreplace app-containers/snapd
+	try log_run "Installing snapd" emerge --autounmask-continue=y --noreplace app-containers/snapd
 
 	if ! file_has_string "sys-fs/squashfs-tools" /etc/portage/package.use/squashtools; then
 		einfo "Add flags to squashtools"
 		echo "sys-fs/squashfs-tools lz4 lzma lzo xattr zstd" >> /etc/portage/package.use/squashtools || die "Could not modify package.use/squashtools"
 
-		try emerge --changed-use --deep sys-fs/squashfs-tools
+		try log_run "Installing squashfs-tools" emerge --changed-use --deep sys-fs/squashfs-tools
 
 		einfo "Creating snap link on /snap"
 		try ln -sf /var/lib/snapd/snap /snap
