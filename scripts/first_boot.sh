@@ -148,6 +148,7 @@ function first_boot() {
 	touch "$FIRST_BOOT_LOG" 2>/dev/null || true
 	chmod 600 "$FIRST_BOOT_LOG" 2>/dev/null || true
 	einfo "Logging detailed output to $FIRST_BOOT_LOG (tip: tail -f $FIRST_BOOT_LOG)"
+	echo "=== $(date -u '+%F %T %Z') first_boot start ===" >> "$FIRST_BOOT_LOG"
 	umask 0022
 
 	# Show all profiles (avoid color parsing issues) and let the user pick.
