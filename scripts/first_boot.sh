@@ -198,7 +198,9 @@ tune_kernel_for_nvidia
 	# Ensure kernel build artifacts are world-readable for module builds (nvidia, etc).
 	if [[ -d /usr/src/linux ]]; then
 		einfo "Relaxing permissions on kernel tree for module builds"
-		chmod -R go+r /usr/src/linux || true
+		# Need read + traverse for Portage user when building out-of-tree modules (e.g. NVIDIA).
+		find -L /usr/src/linux -type d -exec chmod go+rx {} + 2>/dev/null || true
+		find -L /usr/src/linux -type f -exec chmod go+r {} + 2>/dev/null || true
 	fi
 
 	einfo "Blacklisting nouveau and enabling nvidia-drm modeset"
