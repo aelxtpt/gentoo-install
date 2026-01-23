@@ -130,42 +130,17 @@ function tune_kernel_for_nvidia() {
 	}
 
 function first_boot() {
-	# Let user choose a Plasma profile if available.
-	einfo "Detecting available Plasma profiles"
-	local numbers=() profiles=()
-	while IFS= read -r line; do
-		if [[ "$line" =~ ^\[([0-9]+)\][[:space:]]+([^[:space:]]*plasma[^[:space:]]*) ]]; then
-			numbers+=("${BASH_REMATCH[1]}")
-			profiles+=("${BASH_REMATCH[2]}")
-		fi
-	done < <(eselect profile list)
-
-	if [[ ${#profiles[@]} -gt 0 ]]; then
-		einfo "Available Plasma profiles:"
-		local i
-		for i in "${!profiles[@]}"; do
-			echo "  ${numbers[$i]}: ${profiles[$i]}"
-		done
-		read -rp "Choose profile number (blank to skip): " choice
-		if [[ -n "${choice:-}" ]]; then
-			local selected=""
-			for i in "${!numbers[@]}"; do
-				if [[ "$choice" == "${numbers[$i]}" ]]; then
-					selected="${profiles[$i]}"
-					break
-				fi
-			done
-			if [[ -n "$selected" ]]; then
-				einfo "Selecting profile $selected"
-				try eselect profile set "$selected"
-			else
-				ewarn "Invalid choice; skipping profile selection."
-			fi
-		else
-			ewarn "No profile selected; skipping profile selection."
+	# Show all profiles (avoid color parsing issues) and let the user pick.
+	einfo "Available profiles:"
+	eselect profile list || ewarn "Could not list profiles"
+	read -rp "Choose profile number or name (blank to skip): " choice
+	if [[ -n "${choice:-}" ]]; then
+		einfo "Selecting profile $choice"
+		if ! eselect profile set "$choice"; then
+			ewarn "Failed to set profile '$choice'; leaving current profile unchanged."
 		fi
 	else
-		ewarn "No Plasma profiles found; skipping profile selection."
+		ewarn "No profile selected; skipping profile selection."
 	fi
 
 	if ask "Add VIDEO_CARDS, USE, INPUT_DEVICES, ACCEPT_LICENSE to make.conf?"; then
