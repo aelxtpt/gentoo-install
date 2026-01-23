@@ -40,7 +40,8 @@ fi
 echo "Building kernel with $JOBS jobs..."
 make -j"$JOBS"
 make modules_install
-make install
+# Suppress LILO warning; use Gentoo's installkernel wrapper.
+make INSTALLKERNEL=installkernel-gentoo install
 
 kver="$(make kernelrelease)"
 echo "Kernel release: $kver"
