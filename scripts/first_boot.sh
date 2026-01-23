@@ -39,10 +39,13 @@ has_kernel_option() {
 kernel_option_value() {
 	local cfg="$1" opt="$2"
 	if [[ "$cfg" == *.gz ]]; then
-		zgrep -E "^${opt}=" "$cfg" 2>/dev/null | head -n1 | cut -d= -f2
+		# Allow missing values without tripping -e/-o pipefail
+		zgrep -E "^${opt}=" "$cfg" 2>/dev/null || true
 	else
-		grep -E "^${opt}=" "$cfg" 2>/dev/null | head -n1 | cut -d= -f2
+		grep -E "^${opt}=" "$cfg" 2>/dev/null || true
 	fi
+	# Head/cut remain stable; previous stage is forced to succeed.
+	head -n1 | cut -d= -f2
 }
 
 require_kernel_option() {
@@ -50,7 +53,7 @@ require_kernel_option() {
 	local allowed=("$@")
 	if ! has_kernel_option "$cfg" "$opt"; then
 		ewarn "Kernel option $opt not found; set it to one of: ${allowed[*]}"
-		return
+		return 0
 	fi
 	local val
 	val="$(kernel_option_value "$cfg" "$opt")"
@@ -64,6 +67,7 @@ require_kernel_option() {
 	if [[ "$ok" != true ]]; then
 		ewarn "Kernel option $opt=$val, expected one of: ${allowed[*]}"
 	fi
+	return 0
 }
 
 forbid_kernel_option() {
@@ -75,6 +79,7 @@ forbid_kernel_option() {
 			ewarn "Kernel option $opt is enabled ($val); disable it for NVIDIA proprietary drivers."
 		fi
 	fi
+	return 0
 }
 
 ACCEPT_LICENSE="*"
