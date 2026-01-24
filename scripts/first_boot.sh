@@ -244,11 +244,17 @@ EOF
 	einfo "Installing NVIDIA drivers and selecting GL/CL implementations"
 	try log_run "Installing NVIDIA drivers" emerge --verbose --noreplace x11-drivers/nvidia-drivers
 	if command -v eselect >/dev/null 2>&1; then
-		if eselect opengl list | grep -q nvidia; then
-			eselect opengl set nvidia || true
+		if eselect --list-modules 2>/dev/null | grep -qx opengl; then
+			if eselect opengl list | grep -q nvidia; then
+				eselect opengl set nvidia || true
+			fi
+		else
+			ewarn "eselect module 'opengl' not available; skipping GL switch (libglvnd likely in use)."
 		fi
-		if eselect opencl list 2>/dev/null | grep -q nvidia; then
-			eselect opencl set nvidia || true
+		if eselect --list-modules 2>/dev/null | grep -qx opencl; then
+			if eselect opencl list 2>/dev/null | grep -q nvidia; then
+				eselect opencl set nvidia || true
+			fi
 		fi
 	fi
 
