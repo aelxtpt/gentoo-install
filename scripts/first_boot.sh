@@ -531,6 +531,15 @@ function post_install() {
 	if ! file_has_string "app-emulation/qemu" /etc/portage/package.use/emulation; then
 		echo "app-emulation/qemu spice usb pipewire usbredir vhost-net vhost-user-fs" >> /etc/portage/package.use/emulation
 	fi
+	if ! file_has_string "net-dns/dnsmasq" /etc/portage/package.use/emulation; then
+		echo "net-dns/dnsmasq dhcp ipv6 script" >> /etc/portage/package.use/emulation
+	fi
+	if ! file_has_string "net-misc/spice-gtk" /etc/portage/package.use/emulation; then
+		echo "net-misc/spice-gtk usbredir" >> /etc/portage/package.use/emulation
+	fi
+	if ! file_has_string "net-libs/gnutls" /etc/portage/package.use/emulation; then
+		echo "net-libs/gnutls pkcs11 tools" >> /etc/portage/package.use/emulation
+	fi
 
 	try emerge --noreplace --autounmask-write=y --autounmask=y -- "${QEMU_PACKAGES[@]}"
 	try echo "-3\nyes" | etc-update
