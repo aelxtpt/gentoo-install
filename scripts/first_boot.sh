@@ -91,12 +91,13 @@ forbid_kernel_option() {
 
 ACCEPT_LICENSE="*"
 # Wayland-first (keep X for fallback)
-PACKAGES="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-video/pipewire media-video/wireplumber"
+PACKAGES_BASE="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-video/pipewire media-video/wireplumber"
 VIDEO_CARDS="nvidia"
 USE="X suid xvmc nvidia pipewire pulseaudio egl wayland kms gbm opengl alsa"
 INPUT_DEVICES="libinput"
 
-DESKTOP_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm kde-misc/latte-dock")
+DESKTOP_KDE_APPS=("kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm kde-misc/latte-dock")
+DESKTOP_GNOME_APPS=("www-client/firefox gnome-extra/gnome-tweaks")
 
 QEMU_PACKAGES=("app-emulation/qemu app-emulation/libvirt net-misc/bridge-utils app-emulation/virt-manager app-emulation/virt-viewer app-emulation/spice-vdagent")
 
@@ -149,6 +150,20 @@ function first_boot() {
 	einfo "Logging detailed output to $FIRST_BOOT_LOG (tip: tail -f $FIRST_BOOT_LOG)"
 	echo "=== $(date -u '+%F %T %Z') first_boot start ===" >> "$FIRST_BOOT_LOG"
 	umask 0022
+
+	# Desktop choice
+	local desktop_choice=""
+	echo "Choose desktop environment:"
+	echo "  1) KDE Plasma"
+	echo "  2) GNOME"
+	read -rp "Select 1 or 2 (default: KDE): " desktop_choice
+	if [[ -z "$desktop_choice" || "$desktop_choice" == "1" ]]; then
+		desktop_choice="kde"
+		einfo "Selected desktop: KDE Plasma"
+	else
+		desktop_choice="gnome"
+		einfo "Selected desktop: GNOME"
+	fi
 
 	# Show all profiles (avoid color parsing issues) and let the user pick.
 	einfo "Available profiles:"
@@ -271,29 +286,55 @@ EndSection
 EOF
 
 	einfo "Setting desktop packages"
-	try log_run "Installing base desktop packages" emerge --noreplace $PACKAGES
+	try log_run "Installing base desktop packages" emerge --noreplace $PACKAGES_BASE
 
 	if ask "Do you want update world set ?"; then
 		einfo "Update world set"
 		try log_run "Updating @world" emerge --update --deep --newuse @world
 	fi
 
-	einfo "Installing KDE Plasma"
-	try log_run "Installing KDE Plasma" emerge --noreplace kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
+	if [[ "$desktop_choice" == "kde" ]]; then
+		einfo "Installing KDE Plasma"
+		try log_run "Installing KDE Plasma" emerge --noreplace kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
 
-	einfo "Installing desktop apps"
-	try log_run "Installing desktop apps" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_APPS[@]}"
+		einfo "Installing KDE desktop apps"
+		try log_run "Installing KDE desktop apps" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_KDE_APPS[@]}"
 
-    if ! file_exists ~/.xinitrc; then
-    	einfo "Create .xinitrc"
-    	touch ~/.xinitrc
+	    if ! file_exists ~/.xinitrc; then
+	    	einfo "Create .xinitrc for Plasma (startx fallback)"
+	    	touch ~/.xinitrc
 
-    	if ! file_has_string "#!/bin/sh" ~/.xinitrc; then
-		    einfo "Add content to .xinitrc to start plasma"
-		    echo "#!/bin/sh" >> ~/.xinitrc \
-				|| die "Could not add content to .xinitrc"
-			echo "exec dbus-launch --exit-with-session startplasma-x11" >> ~/.xinitrc \
-				|| die "Could not add content to .xinitrc"
+	    	if ! file_has_string "#!/bin/sh" ~/.xinitrc; then
+			    einfo "Add content to .xinitrc to start plasma"
+			    echo "#!/bin/sh" >> ~/.xinitrc \
+					|| die "Could not add content to .xinitrc"
+				echo "exec dbus-launch --exit-with-session startplasma-x11" >> ~/.xinitrc \
+					|| die "Could not add content to .xinitrc"
+			fi
+		fi
+	elif [[ "$desktop_choice" == "gnome" ]]; then
+		einfo "Installing GNOME"
+		try log_run "Installing GNOME" emerge --noreplace gnome-base/gnome gnome-base/gdm
+
+		einfo "Installing GNOME desktop apps"
+		try log_run "Installing GNOME desktop apps" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_GNOME_APPS[@]}"
+
+		if command -v systemctl >/dev/null 2>&1; then
+			einfo "Enabling GDM display manager"
+			systemctl enable --now gdm || ewarn "Failed to enable gdm; please enable manually."
+		fi
+
+	    if ! file_exists ~/.xinitrc; then
+	    	einfo "Create .xinitrc for GNOME (startx fallback)"
+	    	touch ~/.xinitrc
+
+	    	if ! file_has_string "#!/bin/sh" ~/.xinitrc; then
+			    einfo "Add content to .xinitrc to start gnome-session"
+			    echo "#!/bin/sh" >> ~/.xinitrc \
+					|| die "Could not add content to .xinitrc"
+				echo "exec dbus-launch --exit-with-session gnome-session" >> ~/.xinitrc \
+					|| die "Could not add content to .xinitrc"
+			fi
 		fi
 	fi
 
