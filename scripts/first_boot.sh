@@ -423,6 +423,19 @@ EOF
 		fi
 	fi
 
+	if [[ "$desktop_choice" == "kde" ]]; then
+		if stage_done sddm; then
+			einfo "Skipping SDDM install (already done)"
+		else
+			einfo "Installing SDDM display manager"
+			try log_run "Installing SDDM" emerge --noreplace sddm
+			if command -v systemctl >/dev/null 2>&1; then
+				systemctl enable --now sddm || ewarn "Failed to enable SDDM; please enable manually."
+			fi
+			mark_stage_done sddm
+		fi
+	fi
+
 	if command -v systemctl >/dev/null 2>&1; then
 		einfo "Enabling PipeWire for all users (systemd global user units)"
 		systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
