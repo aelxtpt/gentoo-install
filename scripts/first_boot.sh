@@ -136,7 +136,6 @@ CJK_FONT_PACKAGES=(
 	media-fonts/wqy-zenhei
 	media-fonts/wqy-microhei
 	media-fonts/source-han-sans
-	media-fonts/source-han-serif
 )
 
 function ensure_apparmor_ready() {
