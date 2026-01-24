@@ -147,6 +147,8 @@ function tune_kernel_for_nvidia() {
 		./scripts/config --module DRM_TTM || true
 		./scripts/config --enable FB || true
 		./scripts/config --enable FB_SIMPLE || true
+		# Disable IBT so NVIDIA modules can load
+		./scripts/config --disable X86_KERNEL_IBT || true
 		# Disable conflicting drivers
 		./scripts/config --disable DRM_NOUVEAU || true
 		./scripts/config --disable NOUVEAU || true
