@@ -120,7 +120,7 @@ VIDEO_CARDS="nvidia"
 USE="X suid xvmc nvidia pipewire pulseaudio egl wayland kms gbm opengl alsa"
 INPUT_DEVICES="libinput"
 
-DESKTOP_KDE_APPS=(kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm kde-misc/latte-dock)
+DESKTOP_KDE_APPS=(kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm)
 DESKTOP_GNOME_APPS=(www-client/firefox gnome-extra/gnome-tweaks)
 
 QEMU_PACKAGES=("app-emulation/qemu app-emulation/libvirt net-misc/bridge-utils app-emulation/virt-manager app-emulation/virt-viewer app-emulation/spice-vdagent")
