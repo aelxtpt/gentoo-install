@@ -67,6 +67,13 @@ want to consider doing after the base system installation is finished:
 
 If you are looking for a way to detect and manage your kernel configuration, have a look at [autokernel](https://github.com/oddlama/autokernel).
 
+### Starting Plasma on Wayland
+
+`startx` sempre abre Plasma em X11. Para Wayland, use:
+- Com display manager: `systemctl enable --now sddm` e, na tela de login, escolha “Plasma (Wayland)”.
+- Sem display manager: `dbus-run-session startplasma-wayland`.
+Para NVIDIA, mantenha `nvidia-drm.modeset=1` no kernel cmdline.
+
 ### (Optional) sshd
 
 The script can provide a fully configured ssh daemon with reasonably good security settings.
