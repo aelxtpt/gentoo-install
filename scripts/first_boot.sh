@@ -115,7 +115,7 @@ forbid_kernel_option() {
 
 ACCEPT_LICENSE="*"
 # Wayland-first (keep X for fallback)
-PACKAGES_BASE="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-video/pipewire media-video/wireplumber"
+PACKAGES_BASE="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-video/pipewire media-video/wireplumber net-wireless/bluez"
 VIDEO_CARDS="nvidia"
 USE="X suid xvmc nvidia pipewire pulseaudio egl wayland kms gbm opengl alsa"
 INPUT_DEVICES="libinput"
@@ -361,6 +361,11 @@ EOF
 	else
 		try log_run "Installing base desktop packages" emerge --noreplace $PACKAGES_BASE
 		mark_stage_done base_packages
+	fi
+
+	if command -v systemctl >/dev/null 2>&1; then
+		einfo "Enabling Bluetooth service"
+		systemctl enable --now bluetooth || ewarn "Failed to enable bluetooth; please enable manually."
 	fi
 
 	if ask "Do you want update world set ?"; then
