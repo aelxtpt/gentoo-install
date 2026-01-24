@@ -6,6 +6,7 @@
 # Usage: (optional) JOBS=8 ./compile_kernel.sh
 
 set -euo pipefail
+umask 0022
 
 if [[ $EUID -ne 0 ]]; then
 	echo "This script must be run as root." >&2
@@ -37,14 +38,23 @@ if [[ -z "$JOBS" ]]; then
 	fi
 fi
 
-echo "Building kernel with $JOBS jobs..."
+echo "Building kernel image and modules with $JOBS jobs..."
 make -j"$JOBS"
-make modules_install
-# Suppress LILO warning; use Gentoo's installkernel wrapper.
-make INSTALLKERNEL=installkernel-gentoo install
-
-kver="$(make kernelrelease)"
+kver="$(make -s kernelrelease)"
 echo "Kernel release: $kver"
+make modules_install
+
+# Manually install the artifacts to /boot to avoid relying on installkernel.
+bzImage="arch/x86/boot/bzImage"
+if [[ ! -f "$bzImage" ]]; then
+	echo "ERROR: missing $bzImage after build" >&2
+	exit 1
+fi
+echo "Installing kernel to /boot..."
+install -m644 "$bzImage" "/boot/vmlinuz-${kver}"
+ln -sf "vmlinuz-${kver}" /boot/vmlinuz
+install -m644 System.map "/boot/System.map-${kver}"
+install -m644 .config "/boot/config-${kver}"
 
 # Build initramfs.
 echo "Generating initramfs..."
@@ -59,9 +69,13 @@ dracut \
 	--ro-mnt \
 	--force \
 	"/boot/initramfs-${kver}.img"
-cp "/boot/initramfs-${kver}.img" /boot/initramfs.img
+ln -sf "initramfs-${kver}.img" /boot/initramfs.img
 
 echo "Updating grub configuration..."
-grub-mkconfig -o /boot/grub/grub.cfg
+if command -v grub-mkconfig >/dev/null; then
+	grub-mkconfig -o /boot/grub/grub.cfg
+else
+	echo "WARNING: grub-mkconfig not found; please update bootloader manually." >&2
+fi
 
 echo "Done. Installed kernel: $kver"

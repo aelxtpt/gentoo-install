@@ -491,9 +491,6 @@ function post_install() {
 	einfo "Installing VLC"
 	try snap install vlc
 
-	einfo "Installing VSCode"
-	try snap install code --classic
-
 	einfo "Installing Postman"
 	try snap install postman
 
@@ -506,7 +503,7 @@ function post_install() {
 	einfo "Try install qemu"
 	mkdir -p /etc/portage/package.use
 	if ! file_has_string "app-emulation/qemu" /etc/portage/package.use/emulation; then
-		echo "app-emulation/qemu spice usb pulseaudio usbredir vhost-net vhost-user-fs" >> /etc/portage/package.use/emulation
+		echo "app-emulation/qemu spice usb pipewire usbredir vhost-net vhost-user-fs" >> /etc/portage/package.use/emulation
 	fi
 
 	try emerge --noreplace --autounmask-write=y --autounmask=y -- "${QEMU_PACKAGES[@]}"
