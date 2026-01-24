@@ -131,6 +131,13 @@ QEMU_PACKAGES=(
 	app-emulation/virt-viewer
 	app-emulation/spice-vdagent
 )
+CJK_FONT_PACKAGES=(
+	media-fonts/noto-cjk
+	media-fonts/wqy-zenhei
+	media-fonts/wqy-microhei
+	media-fonts/source-han-sans
+	media-fonts/source-han-serif
+)
 
 function ensure_apparmor_ready() {
 	# Install profiles if they are missing; snapd needs tunables/global.
@@ -543,6 +550,9 @@ function post_install() {
 
 	einfo "Installing OBS Studio"
 	try snap install obs-studio
+
+	einfo "Installing CJK fonts (Chinese/Japanese coverage)"
+	try emerge --noreplace --autounmask-continue=y -- "${CJK_FONT_PACKAGES[@]}"
 
 	einfo "Try install qemu"
 	mkdir -p /etc/portage/package.use
