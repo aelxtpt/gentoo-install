@@ -19,7 +19,10 @@ ask() {
 try() { "$@" || die "Command failed: $*"; }
 state_get() {
 	local key="$1"
-	grep -E "^${key}=" "$STATE_FILE" 2>/dev/null | tail -n1 | cut -d= -f2-
+	local line
+	line="$(grep -E "^${key}=" "$STATE_FILE" 2>/dev/null | tail -n1 || true)"
+	echo "${line#*=}"
+	return 0
 }
 state_set() {
 	local key="$1" val="$2"
