@@ -123,7 +123,27 @@ INPUT_DEVICES="libinput"
 DESKTOP_KDE_APPS=(kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm)
 DESKTOP_GNOME_APPS=(www-client/firefox gnome-extra/gnome-tweaks)
 
-QEMU_PACKAGES=("app-emulation/qemu app-emulation/libvirt net-misc/bridge-utils app-emulation/virt-manager app-emulation/virt-viewer app-emulation/spice-vdagent")
+QEMU_PACKAGES=(
+	app-emulation/qemu
+	app-emulation/libvirt
+	net-misc/bridge-utils
+	app-emulation/virt-manager
+	app-emulation/virt-viewer
+	app-emulation/spice-vdagent
+)
+
+function ensure_apparmor_ready() {
+	# Install profiles if they are missing; snapd needs tunables/global.
+	if [[ ! -f /etc/apparmor.d/tunables/global ]]; then
+		einfo "Installing AppArmor profiles (required for snapd)"
+		try log_run "Installing AppArmor profiles" emerge --autounmask-continue=y --noreplace sec-policy/apparmor-profiles
+	fi
+
+	# Make sure the AppArmor service is running so profiles can load.
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl enable --now apparmor || ewarn "Failed to start AppArmor service; please start it manually."
+	fi
+}
 
 function tune_kernel_for_nvidia() {
 	local cfg
@@ -440,9 +460,11 @@ EOF
 		einfo "Skipping systemd/apparmor install (already done)"
 	else
 		einfo "Installing system and apparmor"
-		try log_run "Installing systemd and apparmor" emerge --autounmask-continue=y --noreplace sys-apps/systemd sys-apps/apparmor
+		try log_run "Installing systemd and apparmor" emerge --autounmask-continue=y --noreplace sys-apps/systemd sys-apps/apparmor sec-policy/apparmor-profiles
 		mark_stage_done systemd_apparmor
 	fi
+
+	ensure_apparmor_ready
 
 	einfo "Modifying grub bootloader"
 	if ! file_has_string 'GRUB_CMDLINE_LINUX_DEFAULT="apparmor=1 security=apparmor"' /etc/default/grub; then
@@ -484,6 +506,10 @@ EOF
 }
 
 function post_install() {
+	ensure_apparmor_ready
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl enable --now snapd snapd.socket snapd.apparmor || true
+	fi
 
 	einfo "Installing mailspring"
 	try snap install mailspring
