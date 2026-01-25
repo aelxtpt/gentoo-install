@@ -445,6 +445,17 @@ EOF
 			fi
 			mark_stage_done sddm
 		fi
+
+		if stage_done discover_snap; then
+			einfo "Skipping Discover with snap backend (already done)"
+		else
+			einfo "Installing Discover with snap support"
+			mkdir -p /etc/portage/package.use
+			append_if_missing /etc/portage/package.use/discover "kde-plasma/discover snap" \
+				|| die "Could not set USE=snap for Discover"
+			try log_run "Installing Discover" emerge --noreplace kde-plasma/discover
+			mark_stage_done discover_snap
+		fi
 	fi
 
 	if command -v systemctl >/dev/null 2>&1; then
