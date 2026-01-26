@@ -417,6 +417,15 @@ EOF
 			einfo "Skipping GNOME install (already done)"
 		else
 			einfo "Installing GNOME"
+
+			# Prepare per-package USE needed for GNOME stack.
+			mkdir -p /etc/portage/package.use
+			append_if_missing /etc/portage/package.use/gnome "net-libs/nodejs npm" || die "Could not set USE for nodejs"
+			append_if_missing /etc/portage/package.use/gnome "media-libs/gst-plugins-base theora" || die "Could not set USE for gst-plugins-base"
+			append_if_missing /etc/portage/package.use/gnome "net-misc/spice-gtk vala" || die "Could not set USE for spice-gtk"
+			append_if_missing /etc/portage/package.use/gnome "net-misc/freerdp server" || die "Could not set USE for freerdp"
+			append_if_missing /etc/portage/package.use/gnome "media-libs/libmediaart gtk -qt6" || die "Could not set USE for libmediaart"
+
 			try log_run "Installing GNOME" emerge --noreplace gnome-base/gnome gnome-base/gdm
 
 			einfo "Installing GNOME desktop apps"
