@@ -122,6 +122,19 @@ INPUT_DEVICES="libinput"
 
 DESKTOP_KDE_APPS=(kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm)
 DESKTOP_GNOME_APPS=(www-client/firefox gnome-extra/gnome-tweaks)
+DESKTOP_SWAY_APPS=(
+	gui-wm/sway
+	gui-apps/waybar
+	gui-apps/wofi
+	gui-apps/mako
+	gui-apps/foot
+	gui-apps/grim
+	gui-apps/slurp
+	gui-apps/swaylock
+	app-misc/kanshi
+	gui-apps/xdg-desktop-portal-wlr
+	media-fonts/noto-emoji
+)
 
 QEMU_PACKAGES=(
 	app-emulation/qemu
@@ -216,13 +229,14 @@ function first_boot() {
 		desktop_choice_input="$DESKTOP_CHOICE_FORCE"
 		einfo "Desktop choice forced: $desktop_choice_input"
 	else
-		echo "Choose desktop environment:"
-		echo "  1) KDE Plasma"
-		echo "  2) GNOME"
-		if [[ -n "$prev_desktop" ]]; then
-			echo "Detected previous choice: $prev_desktop"
-		fi
-		read -rp "Select 1 or 2 (default: ${prev_desktop:-KDE}): " desktop_choice_input
+	echo "Choose desktop environment:"
+	echo "  1) KDE Plasma"
+	echo "  2) GNOME"
+	echo "  3) Sway (Wayland)"
+	if [[ -n "$prev_desktop" ]]; then
+		echo "Detected previous choice: $prev_desktop"
+	fi
+	read -rp "Select 1 or 2 (default: ${prev_desktop:-KDE}): " desktop_choice_input
 	fi
 
 	if [[ -z "$desktop_choice_input" ]]; then
@@ -233,6 +247,8 @@ function first_boot() {
 		fi
 	elif [[ "$desktop_choice_input" == "2" || "$desktop_choice_input" =~ ^[Gg] ]]; then
 		desktop_choice="gnome"
+	elif [[ "$desktop_choice_input" == "3" || "$desktop_choice_input" =~ ^[Ss] ]]; then
+		desktop_choice="sway"
 	else
 		desktop_choice="kde"
 	fi
@@ -483,6 +499,47 @@ EOF
 				fi
 			fi
 			mark_stage_done desktop_gnome
+		fi
+	elif [[ "$desktop_choice" == "sway" ]]; then
+		if stage_done desktop_sway; then
+			einfo "Skipping Sway (already done)"
+		else
+			einfo "Installing Sway (Wayland)"
+			try log_run "Installing Sway stack" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_SWAY_APPS[@]}"
+
+			# NVIDIA + wlroots tweaks
+			einfo "Setting NVIDIA wlroots environment for Wayland"
+			mkdir -p /etc/profile.d
+			cat > /etc/profile.d/wl-nvidia.sh <<'EOF'
+export WLR_NO_HARDWARE_CURSORS=1
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export WLR_RENDERER=vulkan
+EOF
+
+			# Minimal sway config if absent
+			if ! file_exists ~/.config/sway/config; then
+				einfo "Creating basic sway config"
+				mkdir -p ~/.config/sway
+				cat > ~/.config/sway/config <<'EOF'
+include /etc/sway/config
+
+# Launchers
+bindsym $mod+d exec wofi --show drun
+bindsym $mod+Return exec foot
+bindsym $mod+Shift+e exec "swaymsg exit"
+
+# Screenshots
+bindsym Print exec grim ~/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png
+bindsym Shift+Print exec grim -g "$(slurp)" ~/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png
+
+exec mako
+exec kanshi
+exec waybar
+EOF
+			fi
+
+			mark_stage_done desktop_sway
 		fi
 	fi
 
