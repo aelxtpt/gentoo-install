@@ -134,6 +134,18 @@ DESKTOP_SWAY_APPS=(
 	gui-libs/xdg-desktop-portal-wlr
 	media-fonts/noto-emoji
 )
+DESKTOP_HYPR_APPS=(
+	gui-wm/hyprland
+	gui-apps/waybar
+	gui-apps/wofi
+	gui-apps/mako
+	gui-apps/foot
+	gui-apps/grim
+	gui-apps/slurp
+	gui-apps/swaylock
+	gui-libs/xdg-desktop-portal-hyprland
+	media-fonts/noto-emoji
+)
 
 QEMU_PACKAGES=(
 	app-emulation/qemu
@@ -232,15 +244,20 @@ function first_boot() {
 	echo "  1) KDE Plasma"
 	echo "  2) GNOME"
 	echo "  3) Sway (Wayland)"
+	echo "  4) Hyprland (Wayland)"
 	if [[ -n "$prev_desktop" ]]; then
 		echo "Detected previous choice: $prev_desktop"
 	fi
-	read -rp "Select 1, 2 or 3 (default: ${prev_desktop:-KDE}): " desktop_choice_input
+	read -rp "Select 1, 2, 3 or 4 (default: ${prev_desktop:-KDE}): " desktop_choice_input
 	fi
 
 	if [[ -z "$desktop_choice_input" ]]; then
 		if [[ "$prev_desktop" == "gnome" ]]; then
 			desktop_choice="gnome"
+		elif [[ "$prev_desktop" == "sway" ]]; then
+			desktop_choice="sway"
+		elif [[ "$prev_desktop" == "hypr" ]]; then
+			desktop_choice="hypr"
 		else
 			desktop_choice="kde"
 		fi
@@ -248,6 +265,8 @@ function first_boot() {
 		desktop_choice="gnome"
 	elif [[ "$desktop_choice_input" == "3" || "$desktop_choice_input" =~ ^[Ss] ]]; then
 		desktop_choice="sway"
+	elif [[ "$desktop_choice_input" == "4" || "$desktop_choice_input" =~ ^[Hh] ]]; then
+		desktop_choice="hypr"
 	else
 		desktop_choice="kde"
 	fi
@@ -544,6 +563,60 @@ EOF
 			fi
 
 			mark_stage_done desktop_sway
+		fi
+	elif [[ "$desktop_choice" == "hypr" ]]; then
+		if stage_done desktop_hypr; then
+			einfo "Skipping Hyprland (already done)"
+		else
+			einfo "Installing Hyprland (Wayland)"
+			try log_run "Installing Hyprland stack" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_HYPR_APPS[@]}"
+
+			einfo "Setting NVIDIA wlroots environment for Wayland"
+			mkdir -p /etc/profile.d
+			cat > /etc/profile.d/wl-nvidia.sh <<'EOF'
+export WLR_NO_HARDWARE_CURSORS=1
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export WLR_RENDERER=vulkan
+EOF
+
+			einfo "Creating basic Hyprland config (per-user)"
+			target_user="${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}"
+			if [[ -n "$target_user" ]]; then
+				target_home="$(eval echo "~$target_user")"
+				hypr_dir="$target_home/.config/hypr"
+				mkdir -p "$hypr_dir"
+				chown "$target_user":"$target_user" "$hypr_dir"
+
+				if [[ ! -d "$hypr_dir/.git" && -z "$(ls -A "$hypr_dir" 2>/dev/null)" ]]; then
+					if command -v git >/dev/null 2>&1; then
+						su - "$target_user" -c "git clone https://github.com/aelxtpt/dots-hyprland.git \"$hypr_dir\"" || ewarn "Could not clone Hyprland dots; please check network/credentials."
+					fi
+				fi
+
+				if [[ ! -f "$hypr_dir/hyprland.conf" ]]; then
+					cat > "$hypr_dir/hyprland.conf" <<'EOF'
+# Basic Hyprland config
+source = ~/.config/hypr/auto.conf
+
+exec = waybar
+exec = mako
+exec = wofi --show drun
+exec-once = xdg-desktop-portal-hyprland &
+exec-once = dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP
+
+env = WLR_NO_HARDWARE_CURSORS,1
+env = GBM_BACKEND,nvidia-drm
+env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+env = WLR_RENDERER,vulkan
+EOF
+					chown "$target_user":"$target_user" "$hypr_dir/hyprland.conf"
+				fi
+			else
+				ewarn "Could not determine target user to place Hyprland config."
+			fi
+
+			mark_stage_done desktop_hypr
 		fi
 	fi
 
