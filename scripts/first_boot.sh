@@ -146,6 +146,23 @@ DESKTOP_HYPR_APPS=(
 	gui-libs/xdg-desktop-portal-hyprland
 	media-fonts/noto-emoji
 )
+II_OVERLAY_PKGS=(
+	app-misc/illogical-impulse-audio
+	app-misc/illogical-impulse-backlight
+	app-misc/illogical-impulse-basic
+	app-misc/illogical-impulse-bibata-modern-classic-bin
+	app-misc/illogical-impulse-fonts-themes
+	app-misc/illogical-impulse-hyprland
+	app-misc/illogical-impulse-kde
+	app-misc/illogical-impulse-microtex-git
+	app-misc/illogical-impulse-oneui4-icons-git
+	app-misc/illogical-impulse-portal
+	app-misc/illogical-impulse-python
+	app-misc/illogical-impulse-quickshell-git
+	app-misc/illogical-impulse-screencapture
+	app-misc/illogical-impulse-toolkit
+	app-misc/illogical-impulse-widgets
+)
 
 QEMU_PACKAGES=(
 	app-emulation/qemu
@@ -614,6 +631,63 @@ EOF
 				fi
 			else
 				ewarn "Could not determine target user to place Hyprland config."
+			fi
+
+			# Offer to install illogical-impulse overlay/config
+			if ask "Install illogical-impulse Hyprland setup (clones aelxtpt/dots-hyprland, creates overlay, installs meta packages)?"; then
+				(
+					set -e
+					OVERLAY_DIR="/var/db/repos/ii-dots"
+					REPO_DIR="/opt/dots-hyprland"
+					arch_keyword="$(portageq envvar ACCEPT_KEYWORDS)"
+
+					einfo "Ensuring eselect-repository and smart-live-rebuild"
+					try emerge --noreplace app-eselect/eselect-repository app-portage/smart-live-rebuild
+
+					if ! eselect repository list | grep -q ' ii-dots'; then
+						einfo "Creating ii-dots overlay"
+						eselect repository create ii-dots || true
+						eselect repository enable ii-dots || true
+					fi
+					if ! eselect repository list | grep -q ' guru '; then
+						einfo "Enabling guru overlay"
+						eselect repository enable guru || true
+					fi
+
+					einfo "Cloning/updating dots-hyprland"
+					mkdir -p "$REPO_DIR"
+					if [[ -d "$REPO_DIR/.git" ]]; then
+						git -C "$REPO_DIR" pull --ff-only || true
+					else
+						git clone https://github.com/aelxtpt/dots-hyprland.git "$REPO_DIR"
+					fi
+
+					cd "$REPO_DIR"
+
+					einfo "Applying Gentoo-specific portage settings from repo"
+					mkdir -p /etc/portage/package.accept_keywords /etc/portage/package.use /etc/portage/package.unmask
+					sed "s/$/ ~${arch_keyword}/" sdata/dist-gentoo/keywords > /etc/portage/package.accept_keywords/illogical-impulse
+					sed "s/$/ ~${arch_keyword}/" sdata/dist-gentoo/qt-keywords > /etc/portage/package.accept_keywords/qt
+					cp sdata/dist-gentoo/qt-unmasks /etc/portage/package.unmask/qt
+					cat sdata/dist-gentoo/useflags > /etc/portage/package.use/illogical-impulse
+					cat sdata/dist-gentoo/additional-useflags >> /etc/portage/package.use/illogical-impulse
+
+					einfo "Syncing portage and updating world"
+					emerge --sync
+					emerge --quiet --newuse --update --deep @world
+					emerge --quiet @smart-live-rebuild || true
+
+					einfo "Importing local ebuilds into overlay"
+					for pkg in "${II_OVERLAY_PKGS[@]}"; do
+						pkdir="${OVERLAY_DIR}/${pkg}"
+						mkdir -p "$pkdir"
+						cp sdata/dist-gentoo/${pkg##*/}/${pkg##*/}*.ebuild "$pkdir"/
+						ebuild "$pkdir"/*.ebuild digest
+					done
+
+					einfo "Installing illogical-impulse meta packages"
+					try emerge --quiet --noreplace --autounmask-continue=y -- "${II_OVERLAY_PKGS[@]}"
+				) || ewarn "illogical-impulse install failed; please check logs and rerun manually."
 			fi
 
 			mark_stage_done desktop_hypr
