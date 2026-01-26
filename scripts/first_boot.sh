@@ -692,6 +692,8 @@ EOF
 						if grep -q "app-misc/songrec" "$pkdir"/*.ebuild; then
 							sed -i 's@app-misc/songrec@media-sound/songrec@g' "$pkdir"/*.ebuild
 						fi
+						# If songrec still not available, drop it to allow install
+						sed -i '/songrec/d' "$pkdir"/*.ebuild || true
 						ebuild "$pkdir"/*.ebuild digest
 					done
 
