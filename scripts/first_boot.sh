@@ -207,27 +207,36 @@ function first_boot() {
 	STATE_FILE="$STATE_DIR/first_boot.state"
 
 	# Desktop choice
+	local desktop_choice_input=""
 	local desktop_choice=""
 	local prev_desktop
 	prev_desktop="$(state_get desktop)"
-	echo "Choose desktop environment:"
-	echo "  1) KDE Plasma"
-	echo "  2) GNOME"
-	if [[ -n "$prev_desktop" ]]; then
-		echo "Detected previous choice: $prev_desktop"
+
+	if [[ -n "${DESKTOP_CHOICE_FORCE:-}" ]]; then
+		desktop_choice_input="$DESKTOP_CHOICE_FORCE"
+		einfo "Desktop choice forced: $desktop_choice_input"
+	else
+		echo "Choose desktop environment:"
+		echo "  1) KDE Plasma"
+		echo "  2) GNOME"
+		if [[ -n "$prev_desktop" ]]; then
+			echo "Detected previous choice: $prev_desktop"
+		fi
+		read -rp "Select 1 or 2 (default: ${prev_desktop:-KDE}): " desktop_choice_input
 	fi
-	read -rp "Select 1 or 2 (default: ${prev_desktop:-KDE}): " desktop_choice
-	if [[ -z "$desktop_choice" ]]; then
+
+	if [[ -z "$desktop_choice_input" ]]; then
 		if [[ "$prev_desktop" == "gnome" ]]; then
 			desktop_choice="gnome"
 		else
 			desktop_choice="kde"
 		fi
-	elif [[ "$desktop_choice" == "2" || "$desktop_choice" =~ ^[Gg] ]]; then
+	elif [[ "$desktop_choice_input" == "2" || "$desktop_choice_input" =~ ^[Gg] ]]; then
 		desktop_choice="gnome"
 	else
 		desktop_choice="kde"
 	fi
+
 	einfo "Selected desktop: ${desktop_choice^^}"
 	state_set desktop "$desktop_choice"
 

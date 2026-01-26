@@ -72,6 +72,7 @@ while [[ $# -gt 0 ]]; do
 			echo "                                  the chroot exits."
 			echo "      --first_boot              Run the post-install \"first_boot\" tasks inside an installed system."
 			echo "      --post_install            Run the \"post_install\" tasks inside an installed system."
+			echo "      --choose_de [kde|gnome]   Set desktop choice and run first_boot accordingly."
 			exit 0
 			;;
 		"-c"|"--config")
@@ -98,6 +99,17 @@ while [[ $# -gt 0 ]]; do
 		"--post_install"|"--post-install")
 			[[ -z $ACTION ]] || die "Multiple actions given"
 			ACTION="post_install"
+			;;
+		"--choose_de"|"--choose-de")
+			[[ -z $ACTION ]] || die "Multiple actions given"
+			ACTION="choose_de"
+			CHOOSE_DE_ARG="${2:-}"
+			# If next token looks like a choice, consume it
+			if [[ "$CHOOSE_DE_ARG" =~ ^(kde|KDE|gnome|GNOME|1|2)$ ]]; then
+				shift
+			else
+				CHOOSE_DE_ARG=""
+			fi
 			;;
 		"__install_gentoo_in_chroot")
 			ACTION="__install_gentoo_in_chroot"
@@ -151,5 +163,6 @@ case "$ACTION" in
 	"__install_gentoo_in_chroot") main_install_gentoo_in_chroot "$@" ;;
 	"first_boot") first_boot "$@" ;;
 	"post_install") post_install "$@" ;;
+	"choose_de") DESKTOP_CHOICE_FORCE="${CHOOSE_DE_ARG:-}" first_boot "$@" ;;
 	*) die "Invalid action '$ACTION'" ;;
 esac
