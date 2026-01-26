@@ -427,6 +427,9 @@ EOF
 			append_if_missing /etc/portage/package.use/gnome "media-libs/libmediaart gtk -qt6" || die "Could not set USE for libmediaart"
 			append_if_missing /etc/portage/package.use/gnome "dev-libs/folks eds" || die "Could not set USE for folks"
 			append_if_missing /etc/portage/package.use/gnome "gnome-extra/evolution-data-server vala" || die "Could not set USE for evolution-data-server"
+			append_if_missing /etc/portage/package.use/gnome "dev-libs/libical vala" || die "Could not set USE for libical"
+			mkdir -p /etc/portage/profile
+			append_if_missing /etc/portage/profile/package.use.mask "-dev-libs/libical vala" || die "Could not unmask USE=vala for libical"
 
 			try log_run "Installing GNOME" emerge --noreplace gnome-base/gnome gnome-base/gdm
 
