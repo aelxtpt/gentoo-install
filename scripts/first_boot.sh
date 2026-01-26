@@ -688,6 +688,10 @@ EOF
 						pkdir="${OVERLAY_DIR}/${pkg}"
 						mkdir -p "$pkdir"
 						cp sdata/dist-gentoo/${pkg##*/}/${pkg##*/}*.ebuild "$pkdir"/
+						# Fix missing songrec package name (in Gentoo it's media-sound/songrec)
+						if grep -q "app-misc/songrec" "$pkdir"/*.ebuild; then
+							sed -i 's@app-misc/songrec@media-sound/songrec@g' "$pkdir"/*.ebuild
+						fi
 						ebuild "$pkdir"/*.ebuild digest
 					done
 
