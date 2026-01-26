@@ -105,7 +105,7 @@ while [[ $# -gt 0 ]]; do
 			ACTION="choose_de"
 			CHOOSE_DE_ARG="${2:-}"
 			# If next token looks like a choice, consume it
-			if [[ "$CHOOSE_DE_ARG" =~ ^(kde|KDE|gnome|GNOME|1|2)$ ]]; then
+			if [[ "$CHOOSE_DE_ARG" =~ ^(kde|KDE|gnome|GNOME|sway|SWAY|1|2|3)$ ]]; then
 				shift
 			else
 				CHOOSE_DE_ARG=""

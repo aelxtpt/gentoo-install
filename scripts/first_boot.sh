@@ -236,7 +236,7 @@ function first_boot() {
 	if [[ -n "$prev_desktop" ]]; then
 		echo "Detected previous choice: $prev_desktop"
 	fi
-	read -rp "Select 1 or 2 (default: ${prev_desktop:-KDE}): " desktop_choice_input
+	read -rp "Select 1, 2 or 3 (default: ${prev_desktop:-KDE}): " desktop_choice_input
 	fi
 
 	if [[ -z "$desktop_choice_input" ]]; then
