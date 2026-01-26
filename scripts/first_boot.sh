@@ -143,7 +143,7 @@ DESKTOP_HYPR_APPS=(
 	gui-apps/grim
 	gui-apps/slurp
 	gui-apps/swaylock
-	gui-libs/xdg-desktop-portal-hyprland
+	gui-libs/xdg-desktop-portal-wlr
 	media-fonts/noto-emoji
 )
 II_OVERLAY_PKGS=(
@@ -246,6 +246,12 @@ function first_boot() {
 
 	STATE_DIR="/var/lib/gentoo-install"
 	STATE_FILE="$STATE_DIR/first_boot.state"
+
+	# Cleanup old libical mask that caused invalid atom errors
+	if [[ -f /etc/portage/profile/package.use.mask ]]; then
+		sed -i '/dev-libs\/libical.*vala/d' /etc/portage/profile/package.use.mask || true
+		if [[ ! -s /etc/portage/profile/package.use.mask ]]; then rm -f /etc/portage/profile/package.use.mask; fi
+	fi
 
 	# Desktop choice
 	local desktop_choice_input=""
