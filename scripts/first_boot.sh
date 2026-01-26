@@ -131,7 +131,6 @@ DESKTOP_SWAY_APPS=(
 	gui-apps/grim
 	gui-apps/slurp
 	gui-apps/swaylock
-	app-misc/kanshi
 	gui-apps/xdg-desktop-portal-wlr
 	media-fonts/noto-emoji
 )
@@ -445,7 +444,7 @@ EOF
 			append_if_missing /etc/portage/package.use/gnome "gnome-extra/evolution-data-server vala" || die "Could not set USE for evolution-data-server"
 			append_if_missing /etc/portage/package.use/gnome "dev-libs/libical vala" || die "Could not set USE for libical"
 			mkdir -p /etc/portage/profile
-			append_if_missing /etc/portage/profile/package.use.mask "-dev-libs/libical vala" || die "Could not unmask USE=vala for libical"
+			append_if_missing /etc/portage/profile/package.use.force "dev-libs/libical vala" || die "Could not force USE=vala for libical"
 
 			try log_run "Installing GNOME" emerge --noreplace gnome-base/gnome gnome-base/gdm
 
