@@ -74,6 +74,11 @@ If you are looking for a way to detect and manage your kernel configuration, hav
 - Sem display manager: `dbus-run-session startplasma-wayland`.
 Para NVIDIA, mantenha `nvidia-drm.modeset=1` no kernel cmdline.
 
+### Starting GNOME on Wayland (NVIDIA)
+- Use GDM como display manager (`systemctl enable --now gdm`).
+- Certifique-se de ter `nvidia-drm.modeset=1` na linha do kernel.
+- O installer configura as opções do driver (preservação de VRAM) e força o GDM a manter Wayland; na tela de login, escolha “GNOME” (não “GNOME on Xorg”).
+
 ### (Optional) sshd
 
 The script can provide a fully configured ssh daemon with reasonably good security settings.

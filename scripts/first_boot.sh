@@ -441,6 +441,35 @@ EOF
 				systemctl enable --now gdm || ewarn "Failed to enable gdm; please enable manually."
 			fi
 
+			# GNOME on NVIDIA Wayland: ensure required bits are set.
+			einfo "Configuring NVIDIA for Wayland sessions"
+			cat > /etc/modprobe.d/nvidia-wayland.conf <<'EOF'
+options nvidia NVreg_PreserveVideoMemoryAllocations=1 NVreg_TemporaryFilePath=/var/tmp
+EOF
+			if command -v systemctl >/dev/null 2>&1; then
+				systemctl enable --now nvidia-suspend.service nvidia-resume.service || true
+				# hibernate unit can fail on systems without proper support; leave it disabled to avoid noise.
+			fi
+			mkdir -p /etc/udev/rules.d
+			cat > /etc/udev/rules.d/62-gdm-wayland-force.rules <<'EOF'
+# Force GDM Wayland even with NVIDIA (requires nvidia-drm.modeset=1)
+ACTION=="add", SUBSYSTEM=="drm", RUN+="/usr/libexec/gdm-runtime-config set daemon WaylandEnable true"
+EOF
+			mkdir -p /etc/gdm
+			cat > /etc/gdm/custom.conf <<'EOF'
+[daemon]
+WaylandEnable=true
+DefaultSession=gnome
+
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+EOF
+
 		    if ! file_exists ~/.xinitrc; then
 		    	einfo "Create .xinitrc for GNOME (startx fallback)"
 		    	touch ~/.xinitrc
