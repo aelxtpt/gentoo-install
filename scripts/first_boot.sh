@@ -694,8 +694,8 @@ EOF
 						fi
 						# If songrec still not available, drop it to allow install
 						sed -i '/songrec/d' "$pkdir"/*.ebuild || true
-						# Drop breeze-plus dependency if missing in Gentoo tree
-						sed -i '/breeze-plus/d' "$pkdir"/*.ebuild || true
+						# Drop theme/font deps not present in Gentoo tree
+						sed -i '/breeze-plus/d;/darkly/d;/space-grotesk/d;/material-symbols-variable/d;/readex-pro/d;/rubik-vf/d' "$pkdir"/*.ebuild || true
 						ebuild "$pkdir"/*.ebuild digest
 					done
 
