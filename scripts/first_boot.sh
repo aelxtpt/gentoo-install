@@ -425,6 +425,8 @@ EOF
 			append_if_missing /etc/portage/package.use/gnome "net-misc/spice-gtk vala" || die "Could not set USE for spice-gtk"
 			append_if_missing /etc/portage/package.use/gnome "net-misc/freerdp server" || die "Could not set USE for freerdp"
 			append_if_missing /etc/portage/package.use/gnome "media-libs/libmediaart gtk -qt6" || die "Could not set USE for libmediaart"
+			append_if_missing /etc/portage/package.use/gnome "dev-libs/folks eds" || die "Could not set USE for folks"
+			append_if_missing /etc/portage/package.use/gnome "gnome-extra/evolution-data-server vala" || die "Could not set USE for evolution-data-server"
 
 			try log_run "Installing GNOME" emerge --noreplace gnome-base/gnome gnome-base/gdm
 
