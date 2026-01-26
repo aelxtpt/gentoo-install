@@ -139,7 +139,7 @@ if [[ -z "$ACTION" ]]; then
 	fi
 fi
 
-if [[ "$ACTION" != "chroot" && "$ACTION" != "first_boot" && "$ACTION" != "post_install" ]]; then
+if [[ "$ACTION" != "chroot" && "$ACTION" != "first_boot" && "$ACTION" != "post_install" && "$ACTION" != "choose_de" ]]; then
 	# Load config if we aren't just chrooting
 	[[ -e "$CONFIG" ]] \
 		 || die "Configuration file '$CONFIG' does not exist. To run the configurator, omit '-i' flag or run ./configure"
