@@ -14,6 +14,23 @@ fi
 
 # 2) Enable seatd (systemd)
 if command -v systemctl >/dev/null 2>&1; then
+  if ! systemctl list-unit-files | grep -q '^seatd\.service'; then
+    mkdir -p /etc/systemd/system
+    cat > /etc/systemd/system/seatd.service <<'UNIT'
+[Unit]
+Description=Seat management daemon (seatd)
+After=local-fs.target
+ConditionVirtualization=!container
+
+[Service]
+ExecStart=/usr/bin/seatd -g seat
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+  fi
   systemctl enable --now seatd.service
 fi
 
