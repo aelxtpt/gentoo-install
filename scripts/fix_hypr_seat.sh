@@ -46,9 +46,12 @@ fi
 if ! getent group seat >/dev/null; then
   groupadd -r seat
 fi
-if ! id -nG "$user" | tr ' ' '\n' | grep -q '^seat$'; then
-  gpasswd -a "$user" seat
-fi
+for grp in seat video render; do
+  if ! getent group "$grp" >/dev/null; then
+    groupadd -r "$grp"
+  fi
+  id -nG "$user" | tr ' ' '\n' | grep -q "^$grp$" || gpasswd -a "$user" "$grp"
+done
 
 echo "Seatd set. Log out and back in (or reboot) for group change to apply."
 
