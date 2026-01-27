@@ -1,3 +1,6 @@
 [submodule "dots-hyperland"]
 	path = dots-hyperland
 	url = https://github.com/aelxtpt/dots-hyprland.git
+[submodule "quickshell"]
+	path = quickshell
+	url = https://github.com/aelxtpt/quickshell.git
