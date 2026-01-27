@@ -8,8 +8,12 @@ if ! command -v emerge >/dev/null 2>&1; then
 fi
 
 # 1) Install seatd if missing
+mkdir -p /etc/portage/package.use
+echo "sys-auth/seatd server" > /etc/portage/package.use/seatd
 if ! qlist -I | grep -q '^sys-auth/seatd$'; then
   emerge --noreplace --quiet sys-auth/seatd
+else
+  emerge --quiet --newuse --noreplace sys-auth/seatd
 fi
 
 # 2) Enable seatd (systemd)
