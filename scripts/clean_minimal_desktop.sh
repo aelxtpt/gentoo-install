@@ -27,6 +27,7 @@ remove_desktops() {
   einfo "Removing GNOME/KDE meta packages (best effort)"
   emerge --quiet --unmerge \
     gnome-base/gnome gnome-base/gdm gnome-shell gnome-extra/gnome-tweaks \
+    gnome-extra/gnome-shell-extensions app-eselect/eselect-gnome-shell-extensions \
     kde-plasma/plasma-meta kde-apps/dolphin kde-plasma/sddm kde-plasma/kdeplasma-addons kde-apps/kdecore-meta \
     || ewarn "Unmerge returned non-zero; continuing"
 
@@ -46,6 +47,7 @@ install_base_packages() {
     kde-frameworks/breeze-icons
     x11-themes/adwaita-icon-theme
     media-fonts/symbols-nerd-font
+    x11-libs/xcb-util-cursor
   )
   ensure_pkg "${pkgs[@]}"
 }
@@ -102,6 +104,31 @@ sync_dots() {
   fi
 }
 
+build_quickshell() {
+  local user="$1" home dir
+  home="$(eval echo "~$user")"
+  dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+  if [[ ! -d "$dir/quickshell" ]]; then
+    ewarn "quickshell submodule missing; skipping build"
+    return
+  fi
+
+  einfo "Ensuring build deps for quickshell"
+  ensure_pkg dev-util/meson dev-util/ninja dev-util/pkgconfig dev-vcs/git \
+    dev-qt/qtbase:6[wayland] dev-qt/qtdeclarative:6 dev-qt/qtwayland:6 \
+    dev-qt/qtquickcontrols2:6 dev-qt/qt5compat:6
+
+  if qlist -I | grep -q '^quickshell$'; then
+    ewarn "Removing distro quickshell to avoid conflicts"
+    emerge --quiet --unmerge quickshell || true
+  fi
+
+  einfo "Building quickshell from submodule"
+  sudo -u "$user" bash -lc "cd '$dir/quickshell' && rm -rf build && meson setup --prefix=/usr --buildtype=release build && ninja -C build"
+  ninja -C "$dir/quickshell/build" install
+}
+
 install_material_symbols() {
   local user="$1" home fonts
   home="$(eval echo "~$user")"
@@ -124,6 +151,7 @@ main() {
   enable_seatd
   add_groups "$user"
   sync_dots "$user"
+  build_quickshell "$user"
   install_material_symbols "$user"
 
   einfo "Done. Reboot or relogin as $user, then run ~/start.sh to launch the themed Hyprland."
