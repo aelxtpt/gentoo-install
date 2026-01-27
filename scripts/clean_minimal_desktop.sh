@@ -115,7 +115,7 @@ build_quickshell() {
   fi
 
   einfo "Ensuring build deps for quickshell"
-  ensure_pkg dev-build/meson dev-build/ninja dev-util/pkgconfig dev-vcs/git \
+  ensure_pkg dev-build/meson dev-build/ninja dev-util/pkgconf dev-vcs/git \
     dev-qt/qtbase:6[wayland] dev-qt/qtdeclarative:6 dev-qt/qtwayland:6 \
     dev-qt/qtquickcontrols2:6 dev-qt/qt5compat:6
 
