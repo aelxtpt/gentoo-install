@@ -611,14 +611,22 @@ EOF
 				mkdir -p "$hypr_dir"
 				chown "$target_user":"$target_user" "$hypr_dir"
 
-				if [[ ! -d "$hypr_dir/.git" && -z "$(ls -A "$hypr_dir" 2>/dev/null)" ]]; then
-					if command -v git >/dev/null 2>&1; then
-						su - "$target_user" -c "git clone https://github.com/aelxtpt/dots-hyprland.git \"$hypr_dir\"" || ewarn "Could not clone Hyprland dots; please check network/credentials."
-					fi
+				# Prefer bundled dots-hyprland submodule in repo; fallback to /opt clone; last resort basic config
+				dots_src=""
+				if [[ -d "$(dirname "$0")/../dots-hyperland/dots/.config" ]]; then
+					dots_src="$(cd "$(dirname "$0")/../dots-hyperland/dots/.config" && pwd)"
+				elif [[ -d /opt/dots-hyprland/dots/.config ]]; then
+					dots_src="/opt/dots-hyprland/dots/.config"
 				fi
 
-				if [[ ! -f "$hypr_dir/hyprland.conf" ]]; then
-					cat > "$hypr_dir/hyprland.conf" <<'EOF'
+				if [[ -n "$dots_src" ]]; then
+					einfo "Syncing Hyprland dots from $dots_src"
+					rsync -a --delete "$dots_src"/ "$target_home/.config/" || ewarn "Failed to sync dots config."
+					chown -R "$target_user":"$target_user" "$target_home/.config"
+				else
+					# Minimal fallback config
+					if [[ ! -f "$hypr_dir/hyprland.conf" ]]; then
+						cat > "$hypr_dir/hyprland.conf" <<'EOF'
 # Basic Hyprland config
 source = ~/.config/hypr/auto.conf
 
@@ -633,7 +641,8 @@ env = GBM_BACKEND,nvidia-drm
 env = __GLX_VENDOR_LIBRARY_NAME,nvidia
 env = WLR_RENDERER,vulkan
 EOF
-					chown "$target_user":"$target_user" "$hypr_dir/hyprland.conf"
+						chown "$target_user":"$target_user" "$hypr_dir/hyprland.conf"
+					fi
 				fi
 			else
 				ewarn "Could not determine target user to place Hyprland config."
@@ -698,6 +707,45 @@ EOF
 						sed -i '/breeze-plus/d;/darkly/d;/space-grotesk/d;/material-symbols-variable/d;/readex-pro/d;/rubik-vf/d' "$pkdir"/*.ebuild || true
 						ebuild "$pkdir"/*.ebuild digest
 					done
+
+					# Provide hyprland-qtutils overlay ebuild if tree lacks it (Gentoo currently doesn't ship it)
+					if ! grep -q 'hyprland-qtutils' /var/db/repos/gentoo/metadata/md5-cache/gui-wm/hyprland-* 2>/dev/null; then
+						qtutils_dir="${OVERLAY_DIR}/gui-libs/hyprland-qtutils"
+						mkdir -p "${qtutils_dir}"
+						cat > "${qtutils_dir}/hyprland-qtutils-9999.ebuild" <<'EOF'
+EAPI=8
+
+inherit git-r3 cmake
+
+DESCRIPTION="Qt helper apps for Hyprland (hyprland-qtutils)"
+HOMEPAGE="https://github.com/hyprwm/hyprland-qtutils"
+EGIT_REPO_URI="https://github.com/hyprwm/hyprland-qtutils.git"
+LICENSE="BSD"
+SLOT="0"
+KEYWORDS="~amd64"
+
+DEPEND="
+	>=gui-libs/hyprutils-0.8.0
+	dev-qt/qtbase:6[gui,widgets,wayland]
+	dev-qt/qtdeclarative:6
+	dev-qt/qtwayland:6
+"
+RDEPEND="${DEPEND}"
+
+src_configure() {
+	local mycmakeargs=(
+		-DCMAKE_BUILD_TYPE=Release
+	)
+	cmake_src_configure
+}
+EOF
+						ebuild "${qtutils_dir}/hyprland-qtutils-9999.ebuild" digest
+					fi
+
+					# Enable qtutils USE for hyprland
+					append_if_missing /etc/portage/package.use/hyprland "gui-wm/hyprland qtutils" || true
+					# Attempt to install qtutils helper; non-fatal if it fails
+					emerge --quiet --noreplace --autounmask-continue=y gui-libs/hyprland-qtutils || ewarn "hyprland-qtutils failed; continuing without it."
 
 					einfo "Installing illogical-impulse meta packages"
 					try emerge --quiet --noreplace --autounmask-continue=y -- "${II_OVERLAY_PKGS[@]}"
