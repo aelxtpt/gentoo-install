@@ -115,7 +115,7 @@ build_quickshell() {
   fi
 
   einfo "Ensuring build deps for quickshell"
-  ensure_pkg dev-build/meson dev-build/ninja dev-util/pkgconf dev-vcs/git \
+  ensure_pkg dev-build/cmake dev-build/ninja dev-util/pkgconf dev-vcs/git \
     dev-qt/qtbase:6[wayland] dev-qt/qtdeclarative:6 dev-qt/qtwayland:6 \
     dev-qt/qt5compat:6
 
@@ -125,7 +125,7 @@ build_quickshell() {
   fi
 
   einfo "Building quickshell from submodule"
-  sudo -u "$user" bash -lc "cd '$dir/quickshell' && rm -rf build && meson setup --prefix=/usr --buildtype=release build && ninja -C build"
+  sudo -u "$user" bash -lc "cd '$dir/quickshell' && rm -rf build && cmake -B build -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr . && ninja -C build"
   ninja -C "$dir/quickshell/build" install
 }
 
