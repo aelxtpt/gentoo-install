@@ -116,8 +116,8 @@ build_quickshell() {
 
   einfo "Ensuring build deps for quickshell"
   ensure_pkg dev-build/meson dev-build/ninja dev-util/pkgconf dev-vcs/git \
-    dev-qt/qtbase:6[wayland] dev-qt/qtdeclarative:6 dev-qt/qtwayland:6 \
-    dev-qt/qtquickcontrols2:6 dev-qt/qt5compat:6
+    dev-qt/qtbase:6[wayland] dev-qt/qtdeclarative:6[quickcontrols2] dev-qt/qtwayland:6 \
+    dev-qt/qt5compat:6
 
   if qlist -I | grep -q '^quickshell$'; then
     ewarn "Removing distro quickshell to avoid conflicts"
