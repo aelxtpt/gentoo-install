@@ -39,6 +39,9 @@ user="${SUDO_USER:-$(logname 2>/dev/null || true)}"
 if [ -z "$user" ]; then
   echo "Could not determine user" >&2; exit 1
 fi
+if ! getent group seat >/dev/null; then
+  groupadd -r seat
+fi
 if ! id -nG "$user" | tr ' ' '\n' | grep -q '^seat$'; then
   gpasswd -a "$user" seat
 fi
