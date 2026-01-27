@@ -623,6 +623,12 @@ EOF
 					einfo "Syncing Hyprland dots from $dots_src"
 					rsync -a --delete "$dots_src"/ "$target_home/.config/" || ewarn "Failed to sync dots config."
 					chown -R "$target_user":"$target_user" "$target_home/.config"
+
+					# Comment legacy window/layer rules that spam errors on newer Hyprland
+					for f in "$target_home/.config/hypr/hyprland/rules.conf" "$target_home/.config/hypr/hyprland/colors.conf"; do
+						[[ -f "$f" ]] || continue
+						sed -i 's/^[[:space:]]*\\(windowrulev\\{0,1\\}\\|layerrule\\)/# &/' "$f" || true
+					done
 				else
 					# Minimal fallback config
 					if [[ ! -f "$hypr_dir/hyprland.conf" ]]; then
