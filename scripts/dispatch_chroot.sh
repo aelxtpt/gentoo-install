@@ -18,6 +18,8 @@ export NPROC_ONE="$((NPROC + 1))"
 # Set default makeflags and emerge flags for parallel emerges
 export MAKEFLAGS="-j$NPROC"
 export EMERGE_DEFAULT_OPTS="--jobs=$NPROC_ONE --load-average=$NPROC"
+# Disable userpriv/usersandbox during automated install to avoid permission issues in /var/tmp/portage
+export FEATURES="-userpriv -usersandbox ${FEATURES-}"
 
 # Unset critical variables
 unset key

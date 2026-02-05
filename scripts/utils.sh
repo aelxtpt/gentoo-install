@@ -177,7 +177,7 @@ function get_device_by_uuid() {
 }
 
 function cache_lsblk_output() {
-	CACHED_LSBLK_OUTPUT="$(lsblk --all --path --pairs --output NAME,PTUUID,PARTUUID)" \
+	CACHED_LSBLK_OUTPUT="$(lsblk --all --path --pairs --output NAME,PTUUID,PARTUUID,TYPE)" \
 		|| die "Error while executing lsblk to cache output"
 }
 
@@ -187,11 +187,22 @@ function get_device_by_ptuuid() {
 	if [[ -v CACHED_LSBLK_OUTPUT && -n "$CACHED_LSBLK_OUTPUT" ]]; then
 		dev="$CACHED_LSBLK_OUTPUT"
 	else
-		dev="$(lsblk --all --path --pairs --output NAME,PTUUID,PARTUUID)" \
+		dev="$(lsblk --all --path --pairs --output NAME,PTUUID,PARTUUID,TYPE)" \
 			|| die "Error while executing lsblk to find PTUUID=$ptuuid"
 	fi
-	dev="$(grep "ptuuid=\"$ptuuid\" partuuid=\"\"" <<< "${dev,,}")" \
-		|| die "Could not find PTUUID=... in lsblk output"
+
+	local matches=()
+	local line
+	while IFS="" read -r line; do
+		matches+=("$line")
+	done < <(printf '%s\n' "${dev,,}" | grep -F "ptuuid=\"$ptuuid\"" | grep -F 'type="disk"')
+
+	[[ ${#matches[@]} -gt 0 ]] \
+		|| die "Could not find PTUUID=$ptuuid in lsblk output (device busy or stale kernel table?)"
+	[[ ${#matches[@]} -eq 1 ]] \
+		|| die "Found multiple devices with PTUUID=$ptuuid (stale kernel table?)"
+
+	dev="${matches[0]}"
 	dev="${dev%'" ptuuid='*}"
 	dev="${dev#'name="'}"
 	echo -n "$dev"
@@ -255,6 +266,53 @@ function resolve_device_by_id() {
 		'luks')     get_device_by_luks_name  "$arg" ;;
 		'device')   echo -n "$arg" ;;
 		*) die "Cannot resolve '$type:$arg' to device (unknown type)"
+	esac
+}
+
+function resolve_device_by_id_safe() {
+	local id="$1"
+	[[ -v DISK_ID_TO_RESOLVABLE[$id] ]] \
+		|| return 1
+
+	local type="${DISK_ID_TO_RESOLVABLE[$id]%%:*}"
+	local arg="${DISK_ID_TO_RESOLVABLE[$id]#*:}"
+
+	case "$type" in
+		'partuuid')
+			[[ -e "/dev/disk/by-partuuid/$arg" ]] \
+				|| return 1
+			echo -n "/dev/disk/by-partuuid/$arg"
+			;;
+		'ptuuid')
+			local line
+			line="$(lsblk --all --path --pairs --output NAME,PTUUID,TYPE 2>/dev/null \
+				| tr '[:upper:]' '[:lower:]' \
+				| grep -F "ptuuid=\"${arg,,}\"" \
+				| grep -F 'type="disk"' \
+				| head -n 1)" \
+				|| return 1
+			[[ -n "$line" ]] || return 1
+			line="${line,,}"
+			line="${line%\" ptuuid=\"*}"
+			line="${line#'name=\"'}"
+			echo -n "$line"
+			;;
+		'uuid')
+			[[ -e "/dev/disk/by-uuid/$arg" ]] \
+				|| return 1
+			echo -n "/dev/disk/by-uuid/$arg"
+			;;
+		'luks')
+			[[ -e "/dev/mapper/$arg" ]] \
+				|| return 1
+			echo -n "/dev/mapper/$arg"
+			;;
+		'device')
+			[[ -e "$arg" ]] \
+				|| return 1
+			echo -n "$arg"
+			;;
+		*) return 1 ;;
 	esac
 }
 

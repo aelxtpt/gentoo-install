@@ -20,24 +20,32 @@ function detect_architecture() {
 
 # Get GRUB platform for current architecture
 function get_grub_platform() {
-	case "${GENTOO_ARCH:-amd64}" in
-		amd64) echo "efi-64" ;;
-		arm64) echo "efi-arm64" ;;
-		x86)   echo "efi-32" ;;
-		arm)   echo "efi-arm" ;;
-		*)     die "Unknown architecture for GRUB platform: $GENTOO_ARCH" ;;
-	esac
+	if [[ "${IS_EFI:-false}" == "true" ]]; then
+		case "${GENTOO_ARCH:-amd64}" in
+			amd64) echo "efi-64" ;;
+			arm64) echo "efi-arm64" ;;
+			x86)   echo "efi-32" ;;
+			arm)   echo "efi-arm" ;;
+			*)     die "Unknown architecture for GRUB platform: $GENTOO_ARCH" ;;
+		esac
+	else
+		echo "pc"
+	fi
 }
 
 # Get GRUB install target for current architecture
 function get_grub_target() {
-	case "${GENTOO_ARCH:-amd64}" in
-		amd64) echo "x86_64-efi" ;;
-		arm64) echo "arm64-efi" ;;
-		x86)   echo "i386-efi" ;;
-		arm)   echo "arm-efi" ;;
-		*)     die "Unknown architecture for GRUB target: $GENTOO_ARCH" ;;
-	esac
+	if [[ "${IS_EFI:-false}" == "true" ]]; then
+		case "${GENTOO_ARCH:-amd64}" in
+			amd64) echo "x86_64-efi" ;;
+			arm64) echo "arm64-efi" ;;
+			x86)   echo "i386-efi" ;;
+			arm)   echo "arm-efi" ;;
+			*)     die "Unknown architecture for GRUB target: $GENTOO_ARCH" ;;
+		esac
+	else
+		echo "i386-pc"
+	fi
 }
 
 # Get QEMU system binary name for current architecture
@@ -56,12 +64,62 @@ function get_qemu_system() {
 
 function sync_time() {
 	einfo "Syncing time"
-	try ntpd -g -q
+	local ntp_servers=()
+	local ntp_decl=""
+	if ntp_decl="$(declare -p NTP_SERVERS 2>/dev/null)"; then
+		if [[ $ntp_decl == "declare -a "* ]]; then
+			ntp_servers=("${NTP_SERVERS[@]}")
+		else
+			read -r -a ntp_servers <<< "${NTP_SERVERS-}"
+		fi
+	fi
+
+	if [[ ${#ntp_servers[@]} -eq 0 ]]; then
+		ntp_servers=(br.pool.ntp.org pool.ntp.br)
+	fi
+
+	einfo "Using NTP servers: ${ntp_servers[*]}"
+	local ntpd_cmd=(ntpd -g -q)
+	ntpd_cmd+=("${ntp_servers[@]}")
+	try "${ntpd_cmd[@]}"
 
 	einfo "Current date: $(LANG=C date)"
 	einfo "Writing time to hardware clock"
 	hwclock --systohc --utc \
 		|| die "Could not save time to hardware clock"
+}
+
+function ensure_pty_limit() {
+	local desired=4096
+	if [[ -w /proc/sys/kernel/pty/max ]]; then
+		local current
+		current="$(cat /proc/sys/kernel/pty/max 2>/dev/null || echo "")"
+		if [[ -n "$current" ]] && [[ "$current" -lt "$desired" ]]; then
+			einfo "Increasing PTY limit from $current to $desired"
+			echo "$desired" > /proc/sys/kernel/pty/max \
+				|| ewarn "Could not increase PTY limit"
+		fi
+	fi
+}
+
+function ensure_portage_tmpdir() {
+	local tmpdir="/var/tmp/portage"
+	mkdir -p "$tmpdir" \
+		|| die "Could not create $tmpdir"
+
+	if getent passwd portage &>/dev/null; then
+		chown -R portage:portage "$tmpdir" \
+			|| die "Could not set ownership on $tmpdir"
+		chmod -R g+rwX "$tmpdir" \
+			|| die "Could not set permissions on $tmpdir"
+		chmod 2775 "$tmpdir" \
+			|| die "Could not set permissions on $tmpdir"
+	else
+		chmod -R a+rwX "$tmpdir" \
+			|| die "Could not set permissions on $tmpdir"
+		chmod 1777 "$tmpdir" \
+			|| die "Could not set permissions on $tmpdir"
+	fi
 }
 
 function check_config() {
@@ -141,6 +199,7 @@ function prepare_installation_environment() {
 
 	# Sync time now to prevent issues later
 	sync_time
+	ensure_pty_limit
 }
 
 function check_encryption_key() {
@@ -719,6 +778,213 @@ function apply_disk_actions() {
 	done
 }
 
+function lsblk_pair_value() {
+	local line="$1"
+	local key="$2"
+	local val
+	val="${line#*$key=\"}"
+	[[ $val == "$line" ]] && { echo -n ""; return; }
+	val="${val%%\"*}"
+	echo -n "$val"
+}
+
+function trim_whitespace() {
+	local val="$1"
+	val="${val#"${val%%[![:space:]]*}"}"
+	val="${val%"${val##*[![:space:]]}"}"
+	echo -n "$val"
+}
+
+function release_disk_users() {
+	local device="$1"
+	local lsblk_output
+	lsblk_output="$(lsblk --all --paths --pairs --output NAME,TYPE,FSTYPE,MOUNTPOINTS --noheadings "$device")" \
+		|| die "Error while executing lsblk for $device"
+
+	local devs=()
+	local mountpoints=()
+	local lvm_devs=()
+	local other_devs=()
+	local line
+	while IFS="" read -r line; do
+		local name
+		local type
+		local fstype
+		local mps
+		name="$(lsblk_pair_value "$line" "NAME")"
+		type="$(lsblk_pair_value "$line" "TYPE")"
+		fstype="$(lsblk_pair_value "$line" "FSTYPE")"
+		mps="$(lsblk_pair_value "$line" "MOUNTPOINTS")"
+
+		[[ -z "$name" ]] && continue
+		[[ "$name" == "$device" ]] && continue
+
+		devs+=("$name")
+
+		if [[ -n "$mps" ]]; then
+			local mp
+			local mps_list=()
+			IFS=',' read -r -a mps_list <<< "$mps"
+			for mp in "${mps_list[@]}"; do
+				[[ -n "$mp" ]] && mountpoints+=("$mp")
+			done
+		fi
+
+		if [[ "$type" == "lvm" ]]; then
+			lvm_devs+=("$name")
+		elif [[ "$type" == "crypt" || "$type" == "raid" || "$type" == "md" || "$type" == "dm" ]]; then
+			other_devs+=("$name")
+		fi
+	done < <(printf '%s\n' "$lsblk_output")
+
+	declare -A dev_map
+	local dev
+	for dev in "${devs[@]}"; do
+		dev_map["$dev"]=true
+		if [[ -e "$dev" ]]; then
+			local resolved
+			resolved="$(readlink -f "$dev" 2>/dev/null || true)"
+			[[ -n "$resolved" ]] && dev_map["$resolved"]=true
+		fi
+	done
+
+	local swap_devs=()
+	if type swapon &>/dev/null; then
+		local swap
+		while IFS="" read -r swap; do
+			[[ -z "$swap" ]] && continue
+			if [[ -n "${dev_map[$swap]+x}" ]]; then
+				swap_devs+=("$swap")
+			fi
+		done < <(swapon --noheadings --show=NAME 2>/dev/null || true)
+	fi
+
+	if [[ ${#mountpoints[@]} -eq 0 ]] \
+		&& [[ ${#swap_devs[@]} -eq 0 ]] \
+		&& [[ ${#lvm_devs[@]} -eq 0 ]] \
+		&& [[ ${#other_devs[@]} -eq 0 ]]; then
+		return 0
+	fi
+
+	ewarn "Target disk appears to be in use: $device"
+	[[ ${#mountpoints[@]} -gt 0 ]] \
+		&& ewarn "Mounted filesystems: ${mountpoints[*]}"
+	[[ ${#swap_devs[@]} -gt 0 ]] \
+		&& ewarn "Active swap devices: ${swap_devs[*]}"
+	[[ ${#lvm_devs[@]} -gt 0 ]] \
+		&& ewarn "LVM devices: ${lvm_devs[*]}"
+	[[ ${#other_devs[@]} -gt 0 ]] \
+		&& ewarn "Other mapped devices: ${other_devs[*]}"
+	[[ ${#other_devs[@]} -gt 0 ]] \
+		&& ewarn "Non-LVM mapped devices may need manual cleanup if partitioning fails."
+
+	ask "Attempt to unmount and deactivate swap/LVM for $device?" \
+		|| die "Aborted because target disk is in use."
+
+	if [[ ${#mountpoints[@]} -gt 0 ]]; then
+		local mp
+		for mp in "${mountpoints[@]}"; do
+			if type mountpoint &>/dev/null; then
+				mountpoint -q -- "$mp" || continue
+			fi
+			umount "$mp" \
+				|| die "Could not unmount $mp"
+		done
+	fi
+
+	if [[ ${#swap_devs[@]} -gt 0 ]]; then
+		local swap
+		for swap in "${swap_devs[@]}"; do
+			swapoff "$swap" \
+				|| die "Could not disable swap on $swap"
+		done
+	fi
+
+	if [[ ${#lvm_devs[@]} -gt 0 ]]; then
+		declare -A lvm_dev_map
+		local dev
+		for dev in "${lvm_devs[@]}"; do
+			lvm_dev_map["$dev"]=true
+			if [[ -e "$dev" ]]; then
+				local resolved
+				resolved="$(readlink -f "$dev" 2>/dev/null || true)"
+				[[ -n "$resolved" ]] && lvm_dev_map["$resolved"]=true
+			fi
+		done
+
+		if type lvs &>/dev/null && type vgchange &>/dev/null; then
+			declare -A vgs
+			local vg_lv
+			while IFS="" read -r vg_lv; do
+				local vg
+				local lvpath
+				vg="$(trim_whitespace "${vg_lv%%|*}")"
+				lvpath="$(trim_whitespace "${vg_lv#*|}")"
+				[[ -z "$vg" || -z "$lvpath" ]] && continue
+				if [[ -n "${lvm_dev_map[$lvpath]+x}" ]]; then
+					vgs["$vg"]=true
+				elif [[ -e "$lvpath" ]]; then
+					local lvpath_resolved
+					lvpath_resolved="$(readlink -f "$lvpath" 2>/dev/null || true)"
+					[[ -n "$lvpath_resolved" ]] \
+						&& [[ -n "${lvm_dev_map[$lvpath_resolved]+x}" ]] \
+						&& vgs["$vg"]=true
+				else
+					continue
+				fi
+			done < <(lvs --noheadings --options vg_name,lv_path --separator '|' 2>/dev/null || true)
+
+			local vg
+			for vg in "${!vgs[@]}"; do
+				vgchange -an "$vg" \
+					|| die "Could not deactivate volume group $vg"
+			done
+		else
+			ewarn "lvm2 tools not found; skipping vgchange"
+		fi
+	fi
+
+	if [[ ${#lvm_devs[@]} -gt 0 ]] && type dmsetup &>/dev/null; then
+		local dm
+		for dm in "${lvm_devs[@]}"; do
+			[[ -e "$dm" ]] || continue
+			dmsetup remove -f "$dm" \
+				|| die "Could not remove device mapper $dm"
+		done
+	fi
+
+	partprobe "$device" \
+		|| die "Could not re-read partition table on $device"
+}
+
+function prepare_disks_for_partitioning() {
+	local param
+	local current_params=()
+	declare -A seen_devices
+	for param in "${DISK_ACTIONS[@]}"; do
+		if [[ $param == ';' ]]; then
+			unset known_arguments
+			unset arguments; declare -A arguments; parse_arguments "${current_params[@]}"
+			if [[ ${arguments[action]-} == "create_gpt" ]]; then
+				local device
+				if [[ -n "${arguments[id]+x}" ]]; then
+					device="$(resolve_device_by_id "${arguments[id]}")" \
+						|| die "Could not resolve device with id=${arguments[id]}"
+				else
+					device="${arguments[device]}"
+				fi
+				if [[ -n "$device" ]] && [[ -z "${seen_devices[$device]+x}" ]]; then
+					seen_devices["$device"]=true
+					release_disk_users "$device"
+				fi
+			fi
+			current_params=()
+		else
+			current_params+=("$param")
+		fi
+	done
+}
+
 function summarize_disk_actions() {
 	elog "[1mCurrent lsblk output:[m"
 	for_line_in <(lsblk \
@@ -748,6 +1014,7 @@ function apply_disk_configuration() {
 
 	ask "Do you really want to apply this disk configuration?" \
 		|| die "Aborted"
+	prepare_disks_for_partitioning
 	countdown "Applying in " 5
 
 	einfo "Applying disk configuration"
@@ -835,6 +1102,104 @@ function file_exists() {
     return 1 # false
 }
 
+function install_state_dir() {
+	if [[ ${EXECUTED_IN_CHROOT-false} == "true" ]]; then
+		echo -n "/.gentoo-install"
+	else
+		echo -n "$ROOT_MOUNTPOINT/.gentoo-install"
+	fi
+}
+
+function install_state_file() {
+	echo -n "$(install_state_dir)/state"
+}
+
+function install_state_rank() {
+	case "$1" in
+		'disk_configured')  echo -n 1 ;;
+		'stage3_extracted') echo -n 2 ;;
+		'chroot_complete')  echo -n 3 ;;
+		*) echo -n 0 ;;
+	esac
+}
+
+function mount_root_for_state() {
+	if mountpoint -q -- "$ROOT_MOUNTPOINT"; then
+		echo -n "already"
+		return 0
+	fi
+
+	local dev
+	dev="$(resolve_device_by_id_safe "$DISK_ID_ROOT")" \
+		|| return 1
+	mkdir -p "$ROOT_MOUNTPOINT" \
+		|| return 1
+	mount "$dev" "$ROOT_MOUNTPOINT" \
+		|| return 1
+	echo -n "mounted"
+}
+
+function read_install_state() {
+	local state_file
+	state_file="$(install_state_file)"
+
+	if [[ ${EXECUTED_IN_CHROOT-false} == "true" ]]; then
+		[[ -f "$state_file" ]] && cat "$state_file"
+		return 0
+	fi
+
+	local mount_state
+	mount_state="$(mount_root_for_state)" \
+		|| return 0
+
+	[[ -f "$state_file" ]] && cat "$state_file"
+
+	if [[ "$mount_state" == "mounted" ]]; then
+		umount -l "$ROOT_MOUNTPOINT" || true
+	fi
+}
+
+function write_install_state() {
+	local stage="$1"
+	local state_dir
+	state_dir="$(install_state_dir)"
+
+	if [[ ${EXECUTED_IN_CHROOT-false} != "true" ]]; then
+		local mount_state
+		mount_state="$(mount_root_for_state)" \
+			|| { ewarn "Could not mount root to write install state"; return 0; }
+	fi
+
+	mkdir -p "$state_dir" \
+		|| die "Could not create install state directory '$state_dir'"
+	echo "$stage" > "$state_dir/state" \
+		|| die "Could not write install state to '$state_dir/state'"
+
+	if [[ ${EXECUTED_IN_CHROOT-false} != "true" ]] && [[ "$mount_state" == "mounted" ]]; then
+		umount -l "$ROOT_MOUNTPOINT" || true
+	fi
+}
+
+function clear_install_state() {
+	local state_dir
+	state_dir="$(install_state_dir)"
+
+	if [[ ${EXECUTED_IN_CHROOT-false} == "true" ]]; then
+		rm -rf "$state_dir"
+		return 0
+	fi
+
+	local mount_state
+	mount_state="$(mount_root_for_state)" \
+		|| return 0
+
+	rm -rf "$state_dir"
+
+	if [[ "$mount_state" == "mounted" ]]; then
+		umount -l "$ROOT_MOUNTPOINT" || true
+	fi
+}
+
 function download_file() {
 	local url="$1"
 }
@@ -899,7 +1264,7 @@ function extract_stage3() {
 	cd "$ROOT_MOUNTPOINT" \
 		|| die "Could not move to '$ROOT_MOUNTPOINT'"
 	# Ensure the directory is empty
-	find . -mindepth 1 -maxdepth 1 -not -name 'lost+found' \
+	find . -mindepth 1 -maxdepth 1 -not -name 'lost+found' -not -name '.gentoo-install' \
 		| grep -q . \
 		&& die "root directory '$ROOT_MOUNTPOINT' is not empty"
 

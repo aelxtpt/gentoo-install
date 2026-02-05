@@ -357,7 +357,7 @@ function load_default_config() {
 
 	SYSTEMD=true
 
-	PORTAGE_SYNC_TYPE="git"
+	PORTAGE_SYNC_TYPE="rsync"
 	PORTAGE_GIT_FULL_HISTORY=false
 	PORTAGE_GIT_MIRROR="https://anongit.gentoo.org/git/repo/sync/gentoo.git"
 

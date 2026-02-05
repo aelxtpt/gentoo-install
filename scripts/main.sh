@@ -9,9 +9,25 @@ function install_stage3() {
 	[[ $# == 0 ]] || die "Too many arguments"
 
 	prepare_installation_environment
-	apply_disk_configuration
-	download_stage3
-	extract_stage3
+	local stage="${INSTALL_RESUME_STAGE-}"
+	local stage_rank
+	stage_rank="$(install_state_rank "$stage")"
+
+	if [[ "$stage_rank" -lt 1 ]]; then
+		apply_disk_configuration
+		write_install_state "disk_configured"
+	else
+		einfo "Skipping disk configuration (resume)"
+	fi
+
+	if [[ "$stage_rank" -lt 2 ]]; then
+		download_stage3
+		extract_stage3
+		write_install_state "stage3_extracted"
+	else
+		einfo "Skipping stage3 extraction (resume)"
+		mount_root
+	fi
 }
 
 function configure_base_system() {
@@ -71,36 +87,142 @@ function configure_base_system() {
 }
 
 function configure_portage() {
+	normalize_mirrors() {
+		local mirrors="$1"
+		# Remove trailing backslashes and quotes, compress whitespace.
+		mirrors="$(sed -e 's/\\\\$//' <<< "$mirrors")"
+		mirrors="${mirrors//\"/}"
+		mirrors="$(tr '\n' ' ' <<< "$mirrors")"
+		mirrors="$(sed -e 's/[[:space:]]\+/ /g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<< "$mirrors")"
+		echo -n "$mirrors"
+	}
+
 	# Prepare /etc/portage for autounmask
 	mkdir_or_die 0755 "/etc/portage/package.use"
 	touch_or_die 0644 "/etc/portage/package.use/zz-autounmask"
 	mkdir_or_die 0755 "/etc/portage/package.keywords"
 	touch_or_die 0644 "/etc/portage/package.keywords/zz-autounmask"
+	ensure_portage_tmpdir
+
+	local make_jobs
+	if type nproc &>/dev/null; then
+		make_jobs="$(nproc)"
+	else
+		make_jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+	fi
+	[[ -n "$make_jobs" ]] || make_jobs=1
+	local makeopts="-j${make_jobs}"
+	export MAKEOPTS="$makeopts"
+	if grep -q "^MAKEOPTS=" /etc/portage/make.conf 2>/dev/null; then
+		sed -i "s/^MAKEOPTS=.*/MAKEOPTS=\"$makeopts\"/" /etc/portage/make.conf \
+			|| die "Could not update MAKEOPTS in /etc/portage/make.conf"
+	else
+		echo "MAKEOPTS=\"$makeopts\"" >> /etc/portage/make.conf \
+			|| die "Could not add MAKEOPTS to /etc/portage/make.conf"
+	fi
 
 	if [[ $SELECT_MIRRORS == "true" ]]; then
-		einfo "Temporarily installing mirrorselect"
-		try emerge --verbose --oneshot app-portage/mirrorselect
+		local mirror_cache_dir="/var/cache/gentoo-install"
+		local mirror_cache_file="$mirror_cache_dir/gentoo_mirrors.conf"
+		local repo_cache_dir="$GENTOO_INSTALL_REPO_DIR/.cache"
+		local repo_cache_file="$repo_cache_dir/gentoo_mirrors.conf"
+		local cached_mirrors=""
+		local mirrors_line=""
 
-		einfo "Selecting fastest portage mirrors"
-		mirrorselect_params=("-s" "4" "-b" "10")
-		[[ $SELECT_MIRRORS_LARGE_FILE == "true" ]] \
-			&& mirrorselect_params+=("-D")
-		try mirrorselect "${mirrorselect_params[@]}"
+		if [[ -s "$mirror_cache_file" ]]; then
+			einfo "Using cached portage mirrors from $mirror_cache_file"
+			cached_mirrors="$(normalize_mirrors "$(cat "$mirror_cache_file")")"
+		elif [[ -s "$repo_cache_file" ]]; then
+			einfo "Using cached portage mirrors from $repo_cache_file"
+			cached_mirrors="$(normalize_mirrors "$(cat "$repo_cache_file")")"
+		else
+			mirrors_line="$(grep "^GENTOO_MIRRORS=" /etc/portage/make.conf | tail -n 1)"
+			if [[ -n "$mirrors_line" ]]; then
+				cached_mirrors="${mirrors_line#GENTOO_MIRRORS=}"
+				cached_mirrors="${cached_mirrors%\"}"
+				cached_mirrors="${cached_mirrors#\"}"
+				cached_mirrors="$(normalize_mirrors "$cached_mirrors")"
+				if [[ -n "$cached_mirrors" ]]; then
+					einfo "Using existing GENTOO_MIRRORS from make.conf"
+					mkdir_or_die 0755 "$mirror_cache_dir"
+					echo "$cached_mirrors" > "$mirror_cache_file" \
+						|| die "Could not write mirror cache to $mirror_cache_file"
+					mkdir_or_die 0755 "$repo_cache_dir"
+					echo "$cached_mirrors" > "$repo_cache_file" \
+						|| die "Could not write mirror cache to $repo_cache_file"
+				fi
+			fi
+		fi
+
+		if [[ -n "$cached_mirrors" ]]; then
+			if grep -q "^GENTOO_MIRRORS=" /etc/portage/make.conf 2>/dev/null; then
+				sed -i "s|^GENTOO_MIRRORS=.*|GENTOO_MIRRORS=\"$cached_mirrors\"|" /etc/portage/make.conf \
+					|| die "Could not update GENTOO_MIRRORS in /etc/portage/make.conf"
+			else
+				echo "GENTOO_MIRRORS=\"$cached_mirrors\"" >> /etc/portage/make.conf \
+					|| die "Could not add GENTOO_MIRRORS to /etc/portage/make.conf"
+			fi
+		else
+			einfo "Temporarily installing mirrorselect"
+			try emerge --verbose --oneshot app-portage/mirrorselect
+
+			einfo "Selecting fastest portage mirrors"
+			mirrorselect_params=("-s" "4" "-b" "10")
+			[[ $SELECT_MIRRORS_LARGE_FILE == "true" ]] \
+				&& mirrorselect_params+=("-D")
+			try mirrorselect "${mirrorselect_params[@]}"
+
+			mirrors_line="$(grep "^GENTOO_MIRRORS=" /etc/portage/make.conf | tail -n 1)"
+			if [[ -n "$mirrors_line" ]]; then
+				local mirrors
+				mirrors="${mirrors_line#GENTOO_MIRRORS=}"
+				mirrors="${mirrors%\"}"
+				mirrors="${mirrors#\"}"
+				mirrors="$(normalize_mirrors "$mirrors")"
+				mkdir_or_die 0755 "$mirror_cache_dir"
+				echo "$mirrors" > "$mirror_cache_file" \
+					|| die "Could not write mirror cache to $mirror_cache_file"
+				mkdir_or_die 0755 "$repo_cache_dir"
+				echo "$mirrors" > "$repo_cache_file" \
+					|| die "Could not write mirror cache to $repo_cache_file"
+			else
+				ewarn "Mirrorselect did not update GENTOO_MIRRORS; skipping cache"
+			fi
+		fi
 
 		einfo "Adding ~$GENTOO_ARCH to ACCEPT_KEYWORDS"
 		echo "ACCEPT_KEYWORDS=\"~$GENTOO_ARCH\"" >> /etc/portage/make.conf \
-			|| die "Could not modify /etc/portage/make.conf"
-
-		einfo "Adding makeopts to make.conf"
-		echo "MAKEOPTS=\"-j6\"" >> /etc/portage/make.conf \
 			|| die "Could not modify /etc/portage/make.conf"
 	fi
 }
 
 function install_sshd() {
-	einfo "Installing sshd"
-	install -m0600 -o root -g root "$GENTOO_INSTALL_REPO_DIR/contrib/sshd_config" /etc/ssh/sshd_config \
-		|| die "Could not install /etc/ssh/sshd_config"
+	einfo "Installing openssh (sshd)"
+	try emerge --verbose net-misc/openssh
+
+	einfo "Generating SSH host keys"
+	try ssh-keygen -A
+
+	einfo "Configuring sshd for root password login"
+	local sshd_config="/etc/ssh/sshd_config"
+	touch "$sshd_config"
+	if grep -q "^PermitRootLogin" "$sshd_config"; then
+		sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' "$sshd_config"
+	else
+		echo "PermitRootLogin yes" >> "$sshd_config"
+	fi
+	if grep -q "^PasswordAuthentication" "$sshd_config"; then
+		sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' "$sshd_config"
+	else
+		echo "PasswordAuthentication yes" >> "$sshd_config"
+	fi
+	if grep -q "^UsePAM" "$sshd_config"; then
+		sed -i 's/^UsePAM.*/UsePAM yes/' "$sshd_config"
+	else
+		echo "UsePAM yes" >> "$sshd_config"
+	fi
+
+	einfo "Enabling sshd service"
 	enable_service sshd
 
 	mkdir_or_die 0700 "/root/"
@@ -120,6 +242,14 @@ function generate_initramfs() {
 	# Generate initramfs
 	einfo "Generating initramfs"
 
+	# Ensure dracut config dirs exist (dracut expects them even if empty).
+	mkdir_or_die 0755 "/etc/dracut.conf.d"
+	local empty_confdir
+	empty_confdir="$(mktemp -d /tmp/dracut-conf.XXXXXX)" \
+		|| die "Could not create temporary dracut confdir"
+	# Ensure we always remove the temp confdir.
+	trap 'rm -rf "$empty_confdir"' RETURN
+
 	local modules=()
 	[[ $USED_RAID == "true" ]] \
 		&& modules+=("mdraid")
@@ -138,10 +268,9 @@ function generate_initramfs() {
 	# Generate initramfs
 	try dracut \
 		--conf          "/dev/null" \
-		--confdir       "/dev/null" \
+		--confdir       "$empty_confdir" \
 		--kver          "$kver" \
-		--no-compress \
-		--no-hostonly \
+		--hostonly \
 		--ro-mnt \
 		--add           "bash ${modules[*]}" \
 		--force \
@@ -165,6 +294,11 @@ function install_grub() {
 	grub_platform="$(get_grub_platform)"
 	grub_target="$(get_grub_target)"
 
+	# Avoid heavy themes on small EFI partitions; disable grub themes.
+	mkdir_or_die 0755 "/etc/portage/package.use"
+	echo "sys-boot/grub -themes" > /etc/portage/package.use/grub \
+		|| die "Could not disable grub themes via package.use"
+
 	# Add grub_platforms
 	einfo "Adding GRUB_PLATFORMS to make.conf (platform: $grub_platform)"
 	echo "GRUB_PLATFORMS=\"$grub_platform\"" >> /etc/portage/make.conf \
@@ -172,11 +306,111 @@ function install_grub() {
 
 	try emerge --verbose sys-boot/grub
 
-	einfo "Installing grub (target: $grub_target)"
-	try grub-install --target="$grub_target" --efi-directory=/boot
+	local boot_dir="/boot"
+	if [[ $IS_EFI == "true" ]]; then
+		mountpoint -q -- "$boot_dir" \
+			|| die "/boot is not mounted; cannot install grub"
+		ensure_boot_space "$boot_dir" 50
+		einfo "Installing grub (EFI target: $grub_target)"
+		try grub-install \
+			--target="$grub_target" \
+			--efi-directory="$boot_dir" \
+			--bootloader-id=gentoo \
+			--removable
+	else
+		boot_dir="/boot/bios"
+		mountpoint -q -- "$boot_dir" \
+			|| die "/boot/bios is not mounted; cannot install grub"
+		ensure_boot_space "$boot_dir" 50
+		einfo "Installing grub (BIOS target: $grub_target)"
+		try grub-install \
+			--target="$grub_target" \
+			--boot-directory="$boot_dir"
+	fi
 
 	einfo "Configuring grub"
 	try grub-mkconfig -o /boot/grub/grub.cfg
+
+	[[ -s /boot/grub/grub.cfg ]] \
+		|| die "grub.cfg was not created; aborting"
+
+	if [[ $IS_EFI == "true" ]]; then
+		local efi_vendor_loader=""
+		local efi_fallback_loader=""
+		case "${GENTOO_ARCH:-amd64}" in
+			amd64) efi_vendor_loader="grubx64.efi";  efi_fallback_loader="/boot/EFI/BOOT/BOOTX64.EFI" ;;
+			x86)   efi_vendor_loader="grubia32.efi"; efi_fallback_loader="/boot/EFI/BOOT/BOOTIA32.EFI" ;;
+			arm64) efi_vendor_loader="grubaa64.efi"; efi_fallback_loader="/boot/EFI/BOOT/BOOTAA64.EFI" ;;
+			arm)   efi_vendor_loader="grubarm.efi";  efi_fallback_loader="/boot/EFI/BOOT/BOOTARM.EFI" ;;
+			*)     efi_vendor_loader="grubx64.efi";  efi_fallback_loader="/boot/EFI/BOOT/BOOTX64.EFI" ;;
+		esac
+
+		local vendor_loader="/boot/EFI/gentoo/$efi_vendor_loader"
+		if [[ -e "$vendor_loader" ]] && [[ ! -e "$efi_fallback_loader" ]]; then
+			einfo "Creating EFI fallback loader at $efi_fallback_loader"
+			mkdir -p "$(dirname "$efi_fallback_loader")" \
+				|| die "Could not create EFI fallback directory"
+			cp "$vendor_loader" "$efi_fallback_loader" \
+				|| die "Could not copy EFI fallback loader"
+		fi
+
+		if command -v efibootmgr &>/dev/null; then
+			local boot_source boot_disk boot_partnum
+			boot_source="$(findmnt -n -o SOURCE /boot)" || boot_source=""
+			if [[ -n "$boot_source" ]]; then
+				boot_disk="/dev/$(lsblk -no PKNAME "$boot_source" 2>/dev/null)"
+				boot_partnum="$(lsblk -no PARTNUM "$boot_source" 2>/dev/null)"
+			fi
+
+			if [[ -n "$boot_disk" ]] && [[ -n "$boot_partnum" ]]; then
+				einfo "Creating EFI boot entry for Gentoo ($boot_disk, part $boot_partnum)"
+				try efibootmgr \
+					-c \
+					-d "$boot_disk" \
+					-p "$boot_partnum" \
+					-L "Gentoo" \
+					-l "\\EFI\\gentoo\\$efi_vendor_loader"
+			else
+				ewarn "Could not determine boot disk/partition for efibootmgr; relying on fallback loader."
+			fi
+		else
+			ewarn "efibootmgr not available; relying on fallback loader."
+		fi
+	fi
+}
+
+function ensure_boot_space() {
+	local boot_dir="$1"
+	local min_mb="${2:-100}"
+
+	local free_mb
+	free_mb="$(df -Pm "$boot_dir" 2>/dev/null | awk 'NR==2 {print $4}')" || free_mb=""
+	if [[ -z "$free_mb" ]]; then
+		ewarn "Could not determine free space on $boot_dir"
+		return 0
+	fi
+
+	if [[ "$free_mb" -ge "$min_mb" ]]; then
+		return 0
+	fi
+
+	ewarn "Low space on $boot_dir (${free_mb}MB free, need ${min_mb}MB). Cleaning old initramfs files."
+	shopt -s nullglob
+	local imgs=("$boot_dir"/initramfs-*.img "$boot_dir"/initramfs.img)
+	local img
+	for img in "${imgs[@]}"; do
+		[[ -e "$img" ]] || continue
+		rm -f -- "$img" || true
+		free_mb="$(df -Pm "$boot_dir" 2>/dev/null | awk 'NR==2 {print $4}')" || free_mb=""
+		if [[ -n "$free_mb" ]] && [[ "$free_mb" -ge "$min_mb" ]]; then
+			break
+		fi
+	done
+	shopt -u nullglob
+
+	if [[ -n "$free_mb" ]] && [[ "$free_mb" -lt "$min_mb" ]]; then
+		die "Not enough free space on $boot_dir (have ${free_mb}MB, need ${min_mb}MB)"
+	fi
 }
 
 function generate_syslinux_cfg() {
@@ -232,6 +466,11 @@ function install_kernel() {
 
 	# Install vanilla kernel
 	einfo "Installing vanilla kernel and related tools"
+	mkdir_or_die 0755 "/etc/portage/package.license"
+	if ! grep -qx "sys-kernel/linux-firmware linux-fw-redistributable" /etc/portage/package.license/linux-firmware 2>/dev/null; then
+		echo "sys-kernel/linux-firmware linux-fw-redistributable" >> /etc/portage/package.license/linux-firmware \
+			|| die "Could not add linux-firmware license"
+	fi
 	try emerge --verbose sys-kernel/gentoo-sources sys-kernel/linux-firmware
 
 	einfo "Setting kernel number"
@@ -278,8 +517,64 @@ function install_kernel() {
 	einfo "Installing lzo lzop"
 	try emerge --verbose lzo lzop
 
+	einfo "Installing dracut"
+	try emerge --verbose sys-kernel/dracut
+
 	einfo "Compiling kernel with $KERNEL_MAKE_JOBS parallel jobs"
 	try cd /usr/src/linux && make -j"$KERNEL_MAKE_JOBS" && make modules_install && make install
+
+	local kver
+	kver="$(cd /usr/src/linux && make kernelrelease)" \
+		|| die "Could not determine kernel release"
+
+	# Ensure kernel/initramfs filenames are versioned and symlinked
+	if [[ $IS_EFI == "true" ]]; then
+		mountpoint -q -- "/boot" \
+			|| die "/boot is not mounted; cannot finalize kernel install"
+	else
+		mountpoint -q -- "/boot/bios" \
+			|| die "/boot/bios is not mounted; cannot finalize kernel install"
+	fi
+
+	local boot_dir="/boot"
+	local kernel_img="$boot_dir/vmlinuz-$kver"
+	local initramfs_img="$boot_dir/initramfs-$kver.img"
+
+	ensure_boot_space "$boot_dir" 100
+
+	# Some installkernel implementations drop unversioned files; fix up names.
+	if [[ ! -e "$kernel_img" ]]; then
+		if [[ -e "$boot_dir/vmlinuz" ]]; then
+			einfo "Renaming kernel to $kernel_img"
+			cp "$boot_dir/vmlinuz" "$kernel_img" \
+				|| die "Could not copy kernel to $kernel_img"
+		else
+			ewarn "Kernel image not found in /boot; grub may not detect it"
+		fi
+	fi
+	if [[ -e "$kernel_img" ]]; then
+		ln -sf "$(basename "$kernel_img")" "$boot_dir/vmlinuz" 2>/dev/null \
+			|| cp "$kernel_img" "$boot_dir/vmlinuz"
+	fi
+
+	# Copy config for reference
+	if [[ -e /usr/src/linux/.config ]]; then
+		cp /usr/src/linux/.config "$boot_dir/config-$kver" || true
+	fi
+
+	# Generate initramfs and stable symlink
+	generate_initramfs "$initramfs_img"
+	if [[ -e "$initramfs_img" ]]; then
+		ln -sf "$(basename "$initramfs_img")" "$boot_dir/initramfs.img" 2>/dev/null \
+			|| cp "$initramfs_img" "$boot_dir/initramfs.img"
+	fi
+
+	# Drop a helper script for rebuilding kernels later.
+	if [[ -f "$GENTOO_INSTALL_REPO_DIR/contrib/compile_kernel.sh" ]]; then
+		cp "$GENTOO_INSTALL_REPO_DIR/contrib/compile_kernel.sh" /usr/src/linux/compile_kernel.sh \
+			|| die "Could not install /usr/src/linux/compile_kernel.sh"
+		chmod +x /usr/src/linux/compile_kernel.sh || true
+	fi
 
 	install_grub
 
@@ -378,6 +673,8 @@ function main_install_gentoo_in_chroot() {
 		mount_by_id "$DISK_ID_BIOS" "/boot/bios"
 	fi
 
+	ensure_portage_tmpdir
+
 	# Sync portage
 	einfo "Syncing portage tree"
 	try emerge-webrsync
@@ -393,6 +690,7 @@ function main_install_gentoo_in_chroot() {
 	try emerge --verbose dev-vcs/git
 
 	if [[ "$PORTAGE_SYNC_TYPE" == "git" ]]; then
+		mkdir_or_die 0755 "/etc/portage/repos.conf"
 		mkdir_or_die 0755 "/etc/portage/repos.conf"
 		cat > /etc/portage/repos.conf/gentoo.conf <<EOF
 [DEFAULT]
@@ -411,6 +709,22 @@ EOF
 			|| die "Could not change permissions of '/etc/portage/repos.conf/gentoo.conf'"
 		rm -rf /var/db/repos/gentoo \
 			|| die "Could not delete obsolete rsync gentoo repository"
+		try emerge --sync
+	else
+		# Force a known-good rsync configuration
+		mkdir_or_die 0755 "/etc/portage/repos.conf"
+		cat > /etc/portage/repos.conf/gentoo.conf <<'EOF'
+[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /var/db/repos/gentoo
+sync-type = rsync
+sync-uri = rsync://rsync.gentoo.org/gentoo-portage
+auto-sync = yes
+EOF
+		chmod 644 /etc/portage/repos.conf/gentoo.conf \
+			|| die "Could not change permissions of '/etc/portage/repos.conf/gentoo.conf'"
 		try emerge --sync
 	fi
 
@@ -451,14 +765,36 @@ EOF
 
 	# Install kernel and initramfs
 	install_kernel
+	write_install_state "chroot_complete"
 
+}
 
+function maybe_resume_install() {
+	local state
+	state="$(read_install_state)"
+	[[ -n "$state" ]] || return 0
+
+	ewarn "Detected previous install state: $state"
+	if [[ "$state" == "chroot_complete" ]]; then
+		if ask "Installation appears complete. Start over?"; then
+			clear_install_state
+		else
+			die "Installation already completed."
+		fi
+	else
+		if ask "Continue from the previous state?"; then
+			INSTALL_RESUME_STAGE="$state"
+		else
+			clear_install_state
+		fi
+	fi
 }
 
 
 function main_install() {
 	[[ $# == 0 ]] || die "Too many arguments"
 
+	maybe_resume_install
 	gentoo_umount
 	install_stage3
 
@@ -478,5 +814,3 @@ function main_chroot() {
 
 	gentoo_chroot "$@"
 }
-
-
