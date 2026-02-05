@@ -1,0 +1,913 @@
+# Standalone helpers (avoid relying on installer env)
+set -euo pipefail
+
+einfo() { echo ">>> $*"; }
+ewarn() { echo "!!! $*" >&2; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+file_exists() { [[ -e "$1" ]]; }
+file_has_string() { grep -qF "$1" "$2" 2>/dev/null; }
+append_if_missing() {
+	local file="$1" line="$2"
+	grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >> "$file"
+}
+ask() {
+	local prompt="$1"
+	read -rp "$prompt (Y/n) " ans
+	[[ -z "$ans" || "$ans" =~ ^[Yy] ]] && return 0
+	return 1
+}
+try() { "$@" || die "Command failed: $*"; }
+state_get() {
+	local key="$1"
+	local line
+	line="$(grep -E "^${key}=" "$STATE_FILE" 2>/dev/null | tail -n1 || true)"
+	echo "${line#*=}"
+	return 0
+}
+state_set() {
+	local key="$1" val="$2"
+	mkdir -p "$STATE_DIR"
+	echo "${key}=${val}" >> "$STATE_FILE"
+}
+stage_done() {
+	local key="$1"
+	[[ "$(state_get "$key")" == "done" ]]
+}
+mark_stage_done() {
+	local key="$1"
+	stage_done "$key" || state_set "$key" "done"
+}
+log_run() {
+	local desc="$1"; shift
+	local log="${FIRST_BOOT_LOG:-/tmp/first_boot.log}"
+	touch "$log"
+	chmod 600 "$log" || true
+	einfo "$desc (log: $log; tail -f \"$log\" for live output)"
+	("$@" 2>&1 | tee -a "$log"); return ${PIPESTATUS[0]}
+}
+
+kernel_config_path() {
+	# Prefer the build tree config if present, then fall back to the running kernel.
+	if [[ -r /usr/src/linux/.config ]]; then
+		echo /usr/src/linux/.config
+		return 0
+	fi
+	if [[ -r /proc/config.gz ]]; then
+		echo /proc/config.gz
+		return 0
+	fi
+	return 1
+}
+
+has_kernel_option() {
+	local cfg="$1" opt="$2"
+	if [[ "$cfg" == *.gz ]]; then
+		zgrep -qE "^${opt}=|^# ${opt} " "$cfg" 2>/dev/null
+	else
+		grep -qE "^${opt}=|^# ${opt} " "$cfg" 2>/dev/null
+	fi
+}
+
+kernel_option_value() {
+	local cfg="$1" opt="$2"
+	local line=""
+	if [[ "$cfg" == *.gz ]]; then
+		line="$(zgrep -E "^${opt}=" "$cfg" 2>/dev/null | head -n1 || true)"
+	else
+		line="$(grep -E "^${opt}=" "$cfg" 2>/dev/null | head -n1 || true)"
+	fi
+	echo "${line#*=}"
+}
+
+require_kernel_option() {
+	local cfg="$1" opt="$2"; shift 2
+	local allowed=("$@")
+	if ! has_kernel_option "$cfg" "$opt"; then
+		ewarn "Kernel option $opt not found; set it to one of: ${allowed[*]}"
+		return 0
+	fi
+	local val
+	val="$(kernel_option_value "$cfg" "$opt")"
+	local ok=false
+	local a
+	for a in "${allowed[@]}"; do
+		if [[ "$val" == "$a" ]]; then
+			ok=true; break
+		fi
+	done
+	if [[ "$ok" != true ]]; then
+		ewarn "Kernel option $opt=$val, expected one of: ${allowed[*]}"
+	fi
+	return 0
+}
+
+forbid_kernel_option() {
+	local cfg="$1" opt="$2"
+	if has_kernel_option "$cfg" "$opt"; then
+		local val
+		val="$(kernel_option_value "$cfg" "$opt")"
+		if [[ -n "$val" ]]; then
+			ewarn "Kernel option $opt is enabled ($val); disable it for NVIDIA proprietary drivers."
+		fi
+	fi
+	return 0
+}
+
+ACCEPT_LICENSE="*"
+# Wayland-first (keep X for fallback)
+PACKAGES_BASE="x11-base/xorg-drivers x11-base/xorg-server x11-drivers/nvidia-drivers media-video/pipewire media-video/wireplumber net-wireless/bluez"
+VIDEO_CARDS="nvidia"
+USE="X suid xvmc nvidia pipewire pulseaudio egl wayland kms gbm opengl alsa"
+INPUT_DEVICES="libinput"
+
+DESKTOP_KDE_APPS=(kde-apps/ark kde-apps/dolphin kde-apps/kcalc kde-apps/konsole app-text/foliate www-client/firefox kde-plasma/plasma-nm)
+DESKTOP_GNOME_APPS=(www-client/firefox gnome-extra/gnome-tweaks)
+DESKTOP_SWAY_APPS=(
+	gui-wm/sway
+	gui-apps/waybar
+	gui-apps/wofi
+	gui-apps/mako
+	gui-apps/foot
+	gui-apps/grim
+	gui-apps/slurp
+	gui-apps/swaylock
+	gui-libs/xdg-desktop-portal-wlr
+	media-fonts/noto-emoji
+)
+DESKTOP_HYPR_APPS=(
+	gui-wm/hyprland
+	gui-apps/waybar
+	gui-apps/wofi
+	gui-apps/mako
+	gui-apps/foot
+	gui-apps/grim
+	gui-apps/slurp
+	gui-apps/swaylock
+	gui-libs/xdg-desktop-portal-wlr
+	media-fonts/noto-emoji
+)
+II_OVERLAY_PKGS=(
+	app-misc/illogical-impulse-audio
+	app-misc/illogical-impulse-backlight
+	app-misc/illogical-impulse-basic
+	app-misc/illogical-impulse-bibata-modern-classic-bin
+	app-misc/illogical-impulse-fonts-themes
+	app-misc/illogical-impulse-hyprland
+	app-misc/illogical-impulse-kde
+	app-misc/illogical-impulse-microtex-git
+	app-misc/illogical-impulse-oneui4-icons-git
+	app-misc/illogical-impulse-portal
+	app-misc/illogical-impulse-python
+	app-misc/illogical-impulse-quickshell-git
+	app-misc/illogical-impulse-screencapture
+	app-misc/illogical-impulse-toolkit
+	app-misc/illogical-impulse-widgets
+)
+
+QEMU_PACKAGES=(
+	app-emulation/qemu
+	app-emulation/libvirt
+	net-misc/bridge-utils
+	app-emulation/virt-manager
+	app-emulation/virt-viewer
+	app-emulation/spice-vdagent
+)
+CJK_FONT_PACKAGES=(
+	media-fonts/noto-cjk
+	media-fonts/wqy-zenhei
+	media-fonts/wqy-microhei
+	media-fonts/source-han-sans
+)
+
+function ensure_apparmor_ready() {
+	# Install profiles if they are missing; snapd needs tunables/global.
+	if [[ ! -f /etc/apparmor.d/tunables/global ]]; then
+		einfo "Installing AppArmor profiles (required for snapd)"
+		try log_run "Installing AppArmor profiles" emerge --autounmask-continue=y --noreplace sec-policy/apparmor-profiles
+	fi
+
+	# Make sure the AppArmor service is running so profiles can load.
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl enable --now apparmor || ewarn "Failed to start AppArmor service; please start it manually."
+	fi
+}
+
+function tune_kernel_for_nvidia() {
+	local cfg
+	if ! cfg="$(kernel_config_path)"; then
+		ewarn "Could not find kernel .config to tune for NVIDIA; skipping."
+		return
+	fi
+	if [[ ! -x /usr/src/linux/scripts/config ]]; then
+		ewarn "Missing /usr/src/linux/scripts/config; skipping kernel tweaks for NVIDIA."
+		return
+	fi
+
+	einfo "Tuning kernel config for NVIDIA proprietary driver"
+	(
+		cd /usr/src/linux || exit 0
+		set +e
+		# Ensure module support and DRM helpers
+		./scripts/config --enable MODULES || true
+		./scripts/config --module DRM || true
+		./scripts/config --module DRM_KMS_HELPER || true
+		./scripts/config --module DRM_TTM || true
+		./scripts/config --enable FB || true
+		./scripts/config --enable FB_SIMPLE || true
+		# Disable IBT so NVIDIA modules can load
+		./scripts/config --disable X86_KERNEL_IBT || true
+		# Disable conflicting drivers
+		./scripts/config --disable DRM_NOUVEAU || true
+		./scripts/config --disable NOUVEAU || true
+		./scripts/config --disable FB_NVIDIA || true
+		# Settle deps
+		make olddefconfig >/dev/null || true
+	)
+
+	# Report current status
+	local cfg_after="/usr/src/linux/.config"
+	require_kernel_option "$cfg_after" "CONFIG_MODULES" "y"
+	require_kernel_option "$cfg_after" "CONFIG_DRM" "y" "m"
+		require_kernel_option "$cfg_after" "CONFIG_DRM_KMS_HELPER" "y" "m"
+		require_kernel_option "$cfg_after" "CONFIG_DRM_TTM" "y" "m"
+	forbid_kernel_option "$cfg_after" "CONFIG_DRM_NOUVEAU"
+	forbid_kernel_option "$cfg_after" "CONFIG_NOUVEAU"
+	forbid_kernel_option "$cfg_after" "CONFIG_FB_NVIDIA"
+}
+
+function first_boot() {
+	# Prepare log location
+	FIRST_BOOT_LOG="${FIRST_BOOT_LOG:-/tmp/first_boot.log}"
+	touch "$FIRST_BOOT_LOG" 2>/dev/null || true
+	chmod 600 "$FIRST_BOOT_LOG" 2>/dev/null || true
+	einfo "Logging detailed output to $FIRST_BOOT_LOG (tip: tail -f $FIRST_BOOT_LOG)"
+	echo "=== $(date -u '+%F %T %Z') first_boot start ===" >> "$FIRST_BOOT_LOG"
+	umask 0022
+
+	STATE_DIR="/var/lib/gentoo-install"
+	STATE_FILE="$STATE_DIR/first_boot.state"
+
+	# Cleanup old libical mask that caused invalid atom errors
+	if [[ -f /etc/portage/profile/package.use.mask ]]; then
+		sed -i '/dev-libs\/libical.*vala/d' /etc/portage/profile/package.use.mask || true
+		if [[ ! -s /etc/portage/profile/package.use.mask ]]; then rm -f /etc/portage/profile/package.use.mask; fi
+	fi
+
+	# Desktop choice
+	local desktop_choice_input=""
+	local desktop_choice=""
+	local prev_desktop
+	prev_desktop="$(state_get desktop)"
+
+	if [[ -n "${DESKTOP_CHOICE_FORCE:-}" ]]; then
+		desktop_choice_input="$DESKTOP_CHOICE_FORCE"
+		einfo "Desktop choice forced: $desktop_choice_input"
+	else
+	echo "Choose desktop environment:"
+	echo "  1) KDE Plasma"
+	echo "  2) GNOME"
+	echo "  3) Sway (Wayland)"
+	echo "  4) Hyprland (Wayland)"
+	if [[ -n "$prev_desktop" ]]; then
+		echo "Detected previous choice: $prev_desktop"
+	fi
+	read -rp "Select 1, 2, 3 or 4 (default: ${prev_desktop:-KDE}): " desktop_choice_input
+	fi
+
+	if [[ -z "$desktop_choice_input" ]]; then
+		if [[ "$prev_desktop" == "gnome" ]]; then
+			desktop_choice="gnome"
+		elif [[ "$prev_desktop" == "sway" ]]; then
+			desktop_choice="sway"
+		elif [[ "$prev_desktop" == "hypr" ]]; then
+			desktop_choice="hypr"
+		else
+			desktop_choice="kde"
+		fi
+	elif [[ "$desktop_choice_input" == "2" || "$desktop_choice_input" =~ ^[Gg] ]]; then
+		desktop_choice="gnome"
+	elif [[ "$desktop_choice_input" == "3" || "$desktop_choice_input" =~ ^[Ss] ]]; then
+		desktop_choice="sway"
+	elif [[ "$desktop_choice_input" == "4" || "$desktop_choice_input" =~ ^[Hh] ]]; then
+		desktop_choice="hypr"
+	else
+		desktop_choice="kde"
+	fi
+
+	einfo "Selected desktop: ${desktop_choice^^}"
+	state_set desktop "$desktop_choice"
+
+	# Show all profiles (avoid color parsing issues) and let the user pick.
+	einfo "Available profiles:"
+	eselect profile list || ewarn "Could not list profiles"
+	read -rp "Choose profile number or name (blank to skip): " choice
+	if [[ -n "${choice:-}" ]]; then
+		einfo "Selecting profile $choice"
+		if ! eselect profile set "$choice"; then
+			ewarn "Failed to set profile '$choice'; leaving current profile unchanged."
+		fi
+	else
+		ewarn "No profile selected; skipping profile selection."
+	fi
+
+	if ask "Add VIDEO_CARDS, USE, INPUT_DEVICES, ACCEPT_LICENSE to make.conf?"; then
+		append_if_missing /etc/portage/make.conf "ACCEPT_LICENSE=\"$ACCEPT_LICENSE\"" \
+			|| die "Could not add ACCEPT_LICENSE on /etc/portage/make.conf"
+		append_if_missing /etc/portage/make.conf "USE=\"$USE\"" \
+			|| die "Could not add USE on /etc/portage/make.conf"
+		append_if_missing /etc/portage/make.conf "VIDEO_CARDS=\"$VIDEO_CARDS\"" \
+			|| die "Could not add VIDEO_CARDS on /etc/portage/make.conf"
+		append_if_missing /etc/portage/make.conf "INPUT_DEVICES=\"$INPUT_DEVICES\"" \
+			|| die "Could not add INPUT_DEVICES on /etc/portage/make.conf"
+	fi
+
+	# because we copy from kernel_config/config and this file probrably has wrong permissions
+	einfo "Resolving permissions on kernel src"
+	chmod a+r /usr/src/linux
+
+	einfo "Configuring PipeWire defaults"
+	mkdir -p /etc/portage/package.use
+	cat > /etc/portage/package.use/pipewire <<'EOF'
+media-video/pipewire X pulseaudio sound-server pipewire-alsa
+media-video/wireplumber systemd
+media-libs/libcanberra alsa pulseaudio udev
+media-plugins/alsa-plugins pulseaudio
+EOF
+
+# Break common circular dep between tiff<->libwebp seen with KDE/NVIDIA stacks.
+	cat > /etc/portage/package.use/graphics <<'EOF'
+media-libs/tiff -webp
+media-libs/libwebp -tiff
+EOF
+
+tune_kernel_for_nvidia
+
+	# Ensure kernel build artifacts are world-readable for module builds (nvidia, etc).
+	if [[ -d /usr/src/linux ]]; then
+		einfo "Relaxing permissions on kernel tree for module builds"
+		# Need read + traverse for Portage user when building out-of-tree modules (e.g. NVIDIA).
+		find -L /usr/src/linux -type d -exec chmod go+rx {} + 2>/dev/null || true
+		# Executables need execute bits for portage (e.g. scripts/basic/fixdep).
+		find -L /usr/src/linux -type f -perm -u=x -exec chmod go+rx {} + 2>/dev/null || true
+		find -L /usr/src/linux -type f ! -perm -u=x -exec chmod go+r {} + 2>/dev/null || true
+	fi
+
+	einfo "Blacklisting nouveau and enabling nvidia-drm modeset"
+	mkdir -p /etc/modprobe.d
+	echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf
+	echo "options nvidia-drm modeset=1" > /etc/modprobe.d/nvidia.conf
+	mkdir -p /etc/modules-load.d
+	cat > /etc/modules-load.d/nvidia.conf <<'EOF'
+nvidia
+nvidia_modeset
+nvidia_uvm
+nvidia_drm
+EOF
+
+	if stage_done kernel_rebuilt; then
+		einfo "Skipping kernel rebuild (already done)"
+	else
+		einfo "Rebuilding kernel with NVIDIA settings"
+		if [[ -x /usr/src/linux/compile_kernel.sh ]]; then
+			try log_run "Building kernel via /usr/src/linux/compile_kernel.sh" /usr/src/linux/compile_kernel.sh
+		else
+			try log_run "Building kernel (manual fallback)" bash -c '
+				cd /usr/src/linux || exit 1
+				if [[ -n "${MAKEOPTS:-}" && "$MAKEOPTS" =~ -j([0-9]+) ]]; then
+					jobs="${BASH_REMATCH[1]}"
+				else
+					jobs="$(nproc)"
+				fi
+				make -j"$jobs" || exit 1
+				make modules_install || exit 1
+				make INSTALLKERNEL=installkernel-gentoo install || exit 1
+				kver="$(make kernelrelease)"
+				mkdir -p /etc/dracut.conf.d
+				tmp_confdir="$(mktemp -d /tmp/dracut-conf.XXXXXX)"
+				trap '\''rm -rf "$tmp_confdir"'\'' EXIT
+				dracut --conf /dev/null --confdir "$tmp_confdir" --kver "$kver" --hostonly --ro-mnt --force "/boot/initramfs-${kver}.img" || exit 1
+				cp "/boot/initramfs-${kver}.img" /boot/initramfs.img || exit 1
+				grub-mkconfig -o /boot/grub/grub.cfg || exit 1
+			'
+		fi
+		mark_stage_done kernel_rebuilt
+	fi
+
+	einfo "Installing NVIDIA drivers and selecting GL/CL implementations"
+	if stage_done nvidia_installed; then
+		einfo "Skipping NVIDIA driver install (already done)"
+	else
+		try log_run "Installing NVIDIA drivers" emerge --verbose --noreplace x11-drivers/nvidia-drivers
+		mark_stage_done nvidia_installed
+	fi
+	if command -v eselect >/dev/null 2>&1; then
+		if eselect --list-modules 2>/dev/null | grep -qx opengl; then
+			if eselect opengl list | grep -q nvidia; then
+				eselect opengl set nvidia || true
+			fi
+		else
+			ewarn "eselect module 'opengl' not available; skipping GL switch (libglvnd likely in use)."
+		fi
+		if eselect --list-modules 2>/dev/null | grep -qx opencl; then
+			if eselect opencl list 2>/dev/null | grep -q nvidia; then
+				eselect opencl set nvidia || true
+			fi
+		fi
+	fi
+
+	einfo "Writing Xorg NVIDIA config (fallback for X sessions)"
+	mkdir -p /etc/X11/xorg.conf.d
+	cat > /etc/X11/xorg.conf.d/10-nvidia.conf <<'EOF'
+Section "OutputClass"
+    Identifier "nvidia"
+    MatchDriver "nvidia-drm"
+    Driver "nvidia"
+    Option "AllowEmptyInitialConfiguration" "yes"
+    Option "PrimaryGPU" "yes"
+EndSection
+EOF
+
+	einfo "Setting desktop packages"
+	if stage_done base_packages; then
+		einfo "Skipping base desktop packages (already done)"
+	else
+		try log_run "Installing base desktop packages" emerge --noreplace $PACKAGES_BASE
+		mark_stage_done base_packages
+	fi
+
+	if command -v systemctl >/dev/null 2>&1; then
+		einfo "Enabling Bluetooth service"
+		systemctl enable --now bluetooth || ewarn "Failed to enable bluetooth; please enable manually."
+	fi
+
+	if ask "Do you want update world set ?"; then
+		einfo "Update world set"
+		try log_run "Updating @world" emerge --update --deep --newuse @world
+	fi
+
+	if [[ "$desktop_choice" == "kde" ]]; then
+		if stage_done desktop_kde; then
+			einfo "Skipping KDE install (already done)"
+		else
+			einfo "Installing KDE Plasma"
+			try log_run "Installing KDE Plasma" emerge --noreplace kde-plasma/plasma-meta kde-plasma/kdeplasma-addons
+
+			einfo "Installing KDE desktop apps"
+			try log_run "Installing KDE desktop apps" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_KDE_APPS[@]}"
+
+		    if ! file_exists ~/.xinitrc; then
+		    	einfo "Create .xinitrc for Plasma (startx fallback)"
+		    	touch ~/.xinitrc
+
+		    	if ! file_has_string "#!/bin/sh" ~/.xinitrc; then
+				    einfo "Add content to .xinitrc to start plasma"
+				    echo "#!/bin/sh" >> ~/.xinitrc \
+						|| die "Could not add content to .xinitrc"
+					echo "exec dbus-launch --exit-with-session startplasma-x11" >> ~/.xinitrc \
+						|| die "Could not add content to .xinitrc"
+				fi
+			fi
+			mark_stage_done desktop_kde
+		fi
+	elif [[ "$desktop_choice" == "gnome" ]]; then
+		if stage_done desktop_gnome; then
+			einfo "Skipping GNOME install (already done)"
+		else
+			einfo "Installing GNOME"
+
+			# Prepare per-package USE needed for GNOME stack.
+			mkdir -p /etc/portage/package.use
+			append_if_missing /etc/portage/package.use/gnome "net-libs/nodejs npm" || die "Could not set USE for nodejs"
+			append_if_missing /etc/portage/package.use/gnome "media-libs/gst-plugins-base theora" || die "Could not set USE for gst-plugins-base"
+			append_if_missing /etc/portage/package.use/gnome "net-misc/spice-gtk vala" || die "Could not set USE for spice-gtk"
+			append_if_missing /etc/portage/package.use/gnome "net-misc/freerdp server" || die "Could not set USE for freerdp"
+			append_if_missing /etc/portage/package.use/gnome "media-libs/libmediaart gtk -qt6" || die "Could not set USE for libmediaart"
+			append_if_missing /etc/portage/package.use/gnome "dev-libs/folks eds" || die "Could not set USE for folks"
+			append_if_missing /etc/portage/package.use/gnome "gnome-extra/evolution-data-server vala" || die "Could not set USE for evolution-data-server"
+			append_if_missing /etc/portage/package.use/gnome "dev-libs/libical vala" || die "Could not set USE for libical"
+			mkdir -p /etc/portage/profile
+			# Clean old mask if present
+			if [[ -f /etc/portage/profile/package.use.mask ]]; then
+				sed -i '/dev-libs\\/libical.*vala/d' /etc/portage/profile/package.use.mask || true
+				if [[ ! -s /etc/portage/profile/package.use.mask ]]; then rm -f /etc/portage/profile/package.use.mask; fi
+			fi
+			append_if_missing /etc/portage/profile/package.use.force "dev-libs/libical vala" || die "Could not force USE=vala for libical"
+
+			try log_run "Installing GNOME" emerge --noreplace gnome-base/gnome gnome-base/gdm
+
+			einfo "Installing GNOME desktop apps"
+			try log_run "Installing GNOME desktop apps" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_GNOME_APPS[@]}"
+
+			if command -v systemctl >/dev/null 2>&1; then
+				einfo "Enabling GDM display manager"
+				systemctl enable --now gdm || ewarn "Failed to enable gdm; please enable manually."
+			fi
+
+			# GNOME on NVIDIA Wayland: ensure required bits are set.
+			einfo "Configuring NVIDIA for Wayland sessions"
+			cat > /etc/modprobe.d/nvidia-wayland.conf <<'EOF'
+options nvidia NVreg_PreserveVideoMemoryAllocations=1 NVreg_TemporaryFilePath=/var/tmp
+EOF
+			if command -v systemctl >/dev/null 2>&1; then
+				systemctl enable --now nvidia-suspend.service nvidia-resume.service || true
+				# hibernate unit can fail on systems without proper support; leave it disabled to avoid noise.
+			fi
+			mkdir -p /etc/udev/rules.d
+			cat > /etc/udev/rules.d/62-gdm-wayland-force.rules <<'EOF'
+# Force GDM Wayland even with NVIDIA (requires nvidia-drm.modeset=1)
+ACTION=="add", SUBSYSTEM=="drm", RUN+="/usr/libexec/gdm-runtime-config set daemon WaylandEnable true"
+EOF
+			mkdir -p /etc/gdm
+			cat > /etc/gdm/custom.conf <<'EOF'
+[daemon]
+WaylandEnable=true
+DefaultSession=gnome
+
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+EOF
+
+		    if ! file_exists ~/.xinitrc; then
+		    	einfo "Create .xinitrc for GNOME (startx fallback)"
+		    	touch ~/.xinitrc
+
+		    	if ! file_has_string "#!/bin/sh" ~/.xinitrc; then
+				    einfo "Add content to .xinitrc to start gnome-session"
+				    echo "#!/bin/sh" >> ~/.xinitrc \
+						|| die "Could not add content to .xinitrc"
+					echo "exec dbus-launch --exit-with-session gnome-session" >> ~/.xinitrc \
+						|| die "Could not add content to .xinitrc"
+				fi
+			fi
+			mark_stage_done desktop_gnome
+		fi
+	elif [[ "$desktop_choice" == "sway" ]]; then
+		if stage_done desktop_sway; then
+			einfo "Skipping Sway (already done)"
+		else
+			einfo "Installing Sway (Wayland)"
+			try log_run "Installing Sway stack" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_SWAY_APPS[@]}"
+
+			# NVIDIA + wlroots tweaks
+			einfo "Setting NVIDIA wlroots environment for Wayland"
+			mkdir -p /etc/profile.d
+			cat > /etc/profile.d/wl-nvidia.sh <<'EOF'
+export WLR_NO_HARDWARE_CURSORS=1
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export WLR_RENDERER=vulkan
+EOF
+
+			# Minimal sway config if absent
+			if ! file_exists ~/.config/sway/config; then
+				einfo "Creating basic sway config"
+				mkdir -p ~/.config/sway
+				cat > ~/.config/sway/config <<'EOF'
+include /etc/sway/config
+
+# Launchers
+bindsym $mod+d exec wofi --show drun
+bindsym $mod+Return exec foot
+bindsym $mod+Shift+e exec "swaymsg exit"
+
+# Screenshots
+bindsym Print exec grim ~/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png
+bindsym Shift+Print exec grim -g "$(slurp)" ~/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png
+
+exec mako
+exec kanshi
+exec waybar
+EOF
+			fi
+
+			mark_stage_done desktop_sway
+		fi
+	elif [[ "$desktop_choice" == "hypr" ]]; then
+		if stage_done desktop_hypr; then
+			einfo "Skipping Hyprland (already done)"
+		else
+			einfo "Installing Hyprland (Wayland)"
+			try log_run "Installing Hyprland stack" emerge --noreplace --autounmask-continue=y -- "${DESKTOP_HYPR_APPS[@]}"
+
+			einfo "Setting NVIDIA wlroots environment for Wayland"
+			mkdir -p /etc/profile.d
+			cat > /etc/profile.d/wl-nvidia.sh <<'EOF'
+export WLR_NO_HARDWARE_CURSORS=1
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export WLR_RENDERER=vulkan
+EOF
+
+			einfo "Creating basic Hyprland config (per-user)"
+			target_user="${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}"
+			if [[ -n "$target_user" ]]; then
+				target_home="$(eval echo "~$target_user")"
+				hypr_dir="$target_home/.config/hypr"
+				mkdir -p "$hypr_dir"
+				chown "$target_user":"$target_user" "$hypr_dir"
+
+				# Prefer bundled dots-hyprland submodule in repo; fallback to /opt clone; last resort basic config
+				dots_src=""
+				if [[ -d "$(dirname "$0")/../dots-hyperland/dots/.config" ]]; then
+					dots_src="$(cd "$(dirname "$0")/../dots-hyperland/dots/.config" && pwd)"
+				elif [[ -d /opt/dots-hyprland/dots/.config ]]; then
+					dots_src="/opt/dots-hyprland/dots/.config"
+				fi
+
+				if [[ -n "$dots_src" ]]; then
+					einfo "Syncing Hyprland dots from $dots_src"
+					rsync -a --delete "$dots_src"/ "$target_home/.config/" || ewarn "Failed to sync dots config."
+					chown -R "$target_user":"$target_user" "$target_home/.config"
+
+					# Comment legacy window/layer rules that spam errors on newer Hyprland
+					for f in "$target_home/.config/hypr/hyprland/rules.conf" "$target_home/.config/hypr/hyprland/colors.conf"; do
+						[[ -f "$f" ]] || continue
+						sed -i 's/^[[:space:]]*\\(windowrulev\\{0,1\\}\\|layerrule\\)/# &/' "$f" || true
+					done
+				else
+					# Minimal fallback config
+					if [[ ! -f "$hypr_dir/hyprland.conf" ]]; then
+						cat > "$hypr_dir/hyprland.conf" <<'EOF'
+# Basic Hyprland config
+source = ~/.config/hypr/auto.conf
+
+exec = waybar
+exec = mako
+exec = wofi --show drun
+exec-once = xdg-desktop-portal-hyprland &
+exec-once = dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP
+
+env = WLR_NO_HARDWARE_CURSORS,1
+env = GBM_BACKEND,nvidia-drm
+env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+env = WLR_RENDERER,vulkan
+EOF
+						chown "$target_user":"$target_user" "$hypr_dir/hyprland.conf"
+					fi
+				fi
+			else
+				ewarn "Could not determine target user to place Hyprland config."
+			fi
+
+			# Offer to install illogical-impulse overlay/config
+			if ask "Install illogical-impulse Hyprland setup (clones aelxtpt/dots-hyprland, creates overlay, installs meta packages)?"; then
+				(
+					set -e
+					OVERLAY_DIR="/var/db/repos/ii-dots"
+					REPO_DIR="/opt/dots-hyprland"
+					arch_keyword="$(portageq envvar ACCEPT_KEYWORDS)"
+
+					einfo "Ensuring eselect-repository and smart-live-rebuild"
+					try emerge --noreplace app-eselect/eselect-repository app-portage/smart-live-rebuild
+
+					if ! eselect repository list | grep -q ' ii-dots'; then
+						einfo "Creating ii-dots overlay"
+						eselect repository create ii-dots || true
+						eselect repository enable ii-dots || true
+					fi
+					if ! eselect repository list | grep -q ' guru '; then
+						einfo "Enabling guru overlay"
+						eselect repository enable guru || true
+					fi
+
+					einfo "Cloning/updating dots-hyprland"
+					mkdir -p "$REPO_DIR"
+					if [[ -d "$REPO_DIR/.git" ]]; then
+						git -C "$REPO_DIR" pull --ff-only || true
+					else
+						git clone https://github.com/aelxtpt/dots-hyprland.git "$REPO_DIR"
+					fi
+
+					cd "$REPO_DIR"
+
+					einfo "Applying Gentoo-specific portage settings from repo"
+					mkdir -p /etc/portage/package.accept_keywords /etc/portage/package.use /etc/portage/package.unmask
+					sed "s/$/ ~${arch_keyword}/" sdata/dist-gentoo/keywords > /etc/portage/package.accept_keywords/illogical-impulse
+					sed "s/$/ ~${arch_keyword}/" sdata/dist-gentoo/qt-keywords > /etc/portage/package.accept_keywords/qt
+					cp sdata/dist-gentoo/qt-unmasks /etc/portage/package.unmask/qt
+					cat sdata/dist-gentoo/useflags > /etc/portage/package.use/illogical-impulse
+					cat sdata/dist-gentoo/additional-useflags >> /etc/portage/package.use/illogical-impulse
+
+					einfo "Syncing portage and updating world"
+					emerge --sync
+					emerge --quiet --newuse --update --deep @world
+					emerge --quiet @smart-live-rebuild || true
+
+					einfo "Importing local ebuilds into overlay"
+					for pkg in "${II_OVERLAY_PKGS[@]}"; do
+						pkdir="${OVERLAY_DIR}/${pkg}"
+						mkdir -p "$pkdir"
+						cp sdata/dist-gentoo/${pkg##*/}/${pkg##*/}*.ebuild "$pkdir"/
+						# Fix missing songrec package name (in Gentoo it's media-sound/songrec)
+						if grep -q "app-misc/songrec" "$pkdir"/*.ebuild; then
+							sed -i 's@app-misc/songrec@media-sound/songrec@g' "$pkdir"/*.ebuild
+						fi
+						# If songrec still not available, drop it to allow install
+						sed -i '/songrec/d' "$pkdir"/*.ebuild || true
+						# Drop theme/font deps not present in Gentoo tree
+						sed -i '/breeze-plus/d;/darkly/d;/space-grotesk/d;/material-symbols-variable/d;/readex-pro/d;/rubik-vf/d' "$pkdir"/*.ebuild || true
+						ebuild "$pkdir"/*.ebuild digest
+					done
+
+					# Provide hyprland-qtutils overlay ebuild if tree lacks it (Gentoo currently doesn't ship it)
+					if ! grep -q 'hyprland-qtutils' /var/db/repos/gentoo/metadata/md5-cache/gui-wm/hyprland-* 2>/dev/null; then
+						qtutils_dir="${OVERLAY_DIR}/gui-libs/hyprland-qtutils"
+						mkdir -p "${qtutils_dir}"
+						cat > "${qtutils_dir}/hyprland-qtutils-9999.ebuild" <<'EOF'
+EAPI=8
+
+inherit git-r3 cmake
+
+DESCRIPTION="Qt helper apps for Hyprland (hyprland-qtutils)"
+HOMEPAGE="https://github.com/hyprwm/hyprland-qtutils"
+EGIT_REPO_URI="https://github.com/hyprwm/hyprland-qtutils.git"
+LICENSE="BSD"
+SLOT="0"
+KEYWORDS="~amd64"
+
+DEPEND="
+	>=gui-libs/hyprutils-0.8.0
+	dev-qt/qtbase:6[gui,widgets,wayland]
+	dev-qt/qtdeclarative:6
+	dev-qt/qtwayland:6
+"
+RDEPEND="${DEPEND}"
+
+src_configure() {
+	local mycmakeargs=(
+		-DCMAKE_BUILD_TYPE=Release
+	)
+	cmake_src_configure
+}
+EOF
+						ebuild "${qtutils_dir}/hyprland-qtutils-9999.ebuild" digest
+					fi
+
+					# Enable qtutils USE for hyprland
+					append_if_missing /etc/portage/package.use/hyprland "gui-wm/hyprland qtutils" || true
+					# Attempt to install qtutils helper; non-fatal if it fails
+					emerge --quiet --noreplace --autounmask-continue=y gui-libs/hyprland-qtutils || ewarn "hyprland-qtutils failed; continuing without it."
+
+					einfo "Installing illogical-impulse meta packages"
+					try emerge --quiet --noreplace --autounmask-continue=y -- "${II_OVERLAY_PKGS[@]}"
+				) || ewarn "illogical-impulse install failed; please check logs and rerun manually."
+			fi
+
+			mark_stage_done desktop_hypr
+		fi
+	fi
+
+	if [[ "$desktop_choice" == "kde" ]]; then
+		if stage_done sddm; then
+			einfo "Skipping SDDM install (already done)"
+		else
+			einfo "Installing SDDM display manager"
+			try log_run "Installing SDDM" emerge --noreplace sddm
+			if command -v systemctl >/dev/null 2>&1; then
+				systemctl enable --now sddm || ewarn "Failed to enable SDDM; please enable manually."
+			fi
+			mark_stage_done sddm
+		fi
+
+		if stage_done discover_snap; then
+			einfo "Skipping Discover with snap backend (already done)"
+		else
+			einfo "Installing Discover with snap support"
+			mkdir -p /etc/portage/package.use
+			append_if_missing /etc/portage/package.use/discover "kde-plasma/discover snap" \
+				|| die "Could not set USE=snap for Discover"
+			try log_run "Installing Discover" emerge --noreplace kde-plasma/discover
+			mark_stage_done discover_snap
+		fi
+	fi
+
+	if command -v systemctl >/dev/null 2>&1; then
+		einfo "Enabling PipeWire for all users (systemd global user units)"
+		systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
+	fi
+
+	if ask "Do you want install Steam ?"; then
+		if stage_done steam; then
+			einfo "Skipping Steam (already done)"
+		else
+			einfo "Installing Steam"
+			mkdir -p /etc/portage/package.accept_keywords
+			try log_run "Installing steam overlay prerequisites" emerge --autounmask-continue=y --noreplace app-eselect/eselect-repository dev-vcs/git
+			try eselect repository enable steam-overlay
+			try log_run "Syncing repositories" emerge --sync
+
+			if ! file_has_string "*/*::steam-overlay" /etc/portage/package.accept_keywords/steam-overlay; then
+				einfo "Add steam overlay package to accept keywords"
+				echo "*/*::steam-overlay" >> /etc/portage/package.accept_keywords/steam-overlay || die "Could not add steam overlay to accept_keywords"
+			fi
+
+			# Not working, need unmaskwrite and etc-update and it has circular conclict with ncurses....
+			try log_run "Installing Steam launcher" bash -c 'emerge --autounmask-write=y --autounmask=y --noreplace games-util/steam-launcher && echo "-3\nyes\nyes" | etc-update && emerge USE="-ncurses" --noreplace games-util/steam-launcher && emerge USE="-gpm" --noreplace ncurses'
+			mark_stage_done steam
+		fi
+	fi
+
+	einfo "Preparing to install snapd"
+	mkdir -p /etc/portage/package.use
+	if ! file_has_string "sys-apps/systemd" /etc/portage/package.use/systemd; then
+		echo "sys-apps/systemd policykit apparmor" >> /etc/portage/package.use/systemd || die "Could not add sys-apps/systemd pol... to package.use"
+		echo "sys-libs/libseccomp static-libs" >> /etc/portage/package.use/systemd || die "Could not add sys-libs/libseccomp stat... to package.use"
+	fi
+
+	if stage_done systemd_apparmor; then
+		einfo "Skipping systemd/apparmor install (already done)"
+	else
+		einfo "Installing system and apparmor"
+		try log_run "Installing systemd and apparmor" emerge --autounmask-continue=y --noreplace sys-apps/systemd sys-apps/apparmor sec-policy/apparmor-profiles
+		mark_stage_done systemd_apparmor
+	fi
+
+	ensure_apparmor_ready
+
+	einfo "Modifying grub bootloader"
+	if ! file_has_string 'GRUB_CMDLINE_LINUX_DEFAULT="apparmor=1 security=apparmor"' /etc/default/grub; then
+		echo 'GRUB_CMDLINE_LINUX_DEFAULT="apparmor=1 security=apparmor"' >> /etc/default/grub || die "Could not modify bootloader"
+	fi
+
+	einfo "Generating new config to grub"
+	try grub-mkconfig -o /boot/grub/grub.cfg
+
+	if stage_done snapd; then
+		einfo "Skipping snapd install (already done)"
+	else
+		einfo "Installing snapd"
+		try log_run "Installing snapd" emerge --autounmask-continue=y --noreplace app-containers/snapd
+		mark_stage_done snapd
+	fi
+
+	if ! file_has_string "sys-fs/squashfs-tools" /etc/portage/package.use/squashtools; then
+		einfo "Add flags to squashtools"
+		echo "sys-fs/squashfs-tools lz4 lzma lzo xattr zstd" >> /etc/portage/package.use/squashtools || die "Could not modify package.use/squashtools"
+
+		if stage_done squashfs; then
+			einfo "Skipping squashfs-tools (already done)"
+		else
+			try log_run "Installing squashfs-tools" emerge --changed-use --deep sys-fs/squashfs-tools
+			mark_stage_done squashfs
+		fi
+
+		einfo "Creating snap link on /snap"
+		try ln -sf /var/lib/snapd/snap /snap
+	fi
+
+	einfo "Enabling snapd on systemd"
+	systemctl enable --now snapd
+	systemctl enable --now snapd.socket
+	systemctl enable --now snapd.apparmor
+
+	einfo "Reboot your system now and after execute ./install post_install"
+}
+
+function post_install() {
+	ensure_apparmor_ready
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl enable --now snapd snapd.socket snapd.apparmor || true
+	fi
+
+	einfo "Installing mailspring"
+	try snap install mailspring
+
+	einfo "Installing VLC"
+	try snap install vlc
+
+	einfo "Installing Postman"
+	try snap install postman
+
+	einfo "Installing discord"
+	try snap install discord
+
+	einfo "Installing OBS Studio"
+	try snap install obs-studio
+
+	einfo "Installing CJK fonts (Chinese/Japanese coverage)"
+	try emerge --noreplace --autounmask-continue=y -- "${CJK_FONT_PACKAGES[@]}"
+
+	einfo "Try install qemu"
+	mkdir -p /etc/portage/package.use
+	if ! file_has_string "app-emulation/qemu" /etc/portage/package.use/emulation; then
+		echo "app-emulation/qemu spice usb pipewire usbredir vhost-net vhost-user-fs" >> /etc/portage/package.use/emulation
+	fi
+	if ! file_has_string "net-dns/dnsmasq" /etc/portage/package.use/emulation; then
+		echo "net-dns/dnsmasq dhcp ipv6 script" >> /etc/portage/package.use/emulation
+	fi
+	if ! file_has_string "net-misc/spice-gtk" /etc/portage/package.use/emulation; then
+		echo "net-misc/spice-gtk usbredir" >> /etc/portage/package.use/emulation
+	fi
+	if ! file_has_string "net-libs/gnutls" /etc/portage/package.use/emulation; then
+		echo "net-libs/gnutls pkcs11 tools" >> /etc/portage/package.use/emulation
+	fi
+
+	try emerge --noreplace --autounmask-write=y --autounmask=y -- "${QEMU_PACKAGES[@]}"
+	try echo "-3\nyes" | etc-update
+	try emerge --noreplace -- "${QEMU_PACKAGES[@]}"
+}
